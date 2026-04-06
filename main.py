@@ -20,8 +20,10 @@ TYPE_MAP = {
     "📄 محتوى": "content",
 }
 
+BTN_SWAP = "🔀 تغيير"
+
 ADMIN_BTNS   = {BTN_MANAGE, BTN_ADMINS}
-SPECIAL_BTNS = {BTN_BACK, BTN_ADD, BTN_MANAGE, BTN_ADMINS, BTN_CANCEL} | set(TYPE_MAP.keys())
+SPECIAL_BTNS = {BTN_BACK, BTN_ADD, BTN_MANAGE, BTN_ADMINS, BTN_CANCEL, BTN_SWAP} | set(TYPE_MAP.keys())
 
 # ── قاعدة البيانات ────────────────────────────────────────────────
 def db():
@@ -119,15 +121,13 @@ def del_btn(bid):
     c = db(); c.execute("DELETE FROM buttons WHERE id=?", (bid,)); c.commit(); c.close()
 
 
-def move_btn(bid, direction):
+def swap_btns(bid1, bid2):
+    """يبدّل موضع زرين (ord + new_row)."""
     c = db(); cur = c.cursor()
-    row = dict(cur.execute("SELECT * FROM buttons WHERE id=?", (bid,)).fetchone())
-    pid = row["parent_id"]
-    ids = _siblings(cur, pid)
-    i = ids.index(bid); j = i - 1 if direction == "up" else i + 1
-    if not (0 <= j < len(ids)): c.close(); return
-    ids[i], ids[j] = ids[j], ids[i]
-    _renumber(cur, ids)
+    b1 = dict(cur.execute("SELECT ord, new_row FROM buttons WHERE id=?", (bid1,)).fetchone())
+    b2 = dict(cur.execute("SELECT ord, new_row FROM buttons WHERE id=?", (bid2,)).fetchone())
+    cur.execute("UPDATE buttons SET ord=?, new_row=? WHERE id=?", (b2['ord'], b2['new_row'], bid1))
+    cur.execute("UPDATE buttons SET ord=?, new_row=? WHERE id=?", (b1['ord'], b1['new_row'], bid2))
     c.commit(); c.close()
 
 # ── content_items ─────────────────────────────────────────────────
@@ -205,16 +205,31 @@ def kb_manage(pid=None):
     for b in btns:
         rows.append([
             InlineKeyboardButton(b['label'], callback_data=f"e_{b['id']}"),
-            InlineKeyboardButton("⬆️", callback_data=f"u_{b['id']}"),
-            InlineKeyboardButton("⬇️", callback_data=f"d_{b['id']}"),
             InlineKeyboardButton("🗑", callback_data=f"x_{b['id']}"),
             InlineKeyboardButton("➕↕", callback_data=f"add_after_{b['id']}"),
             InlineKeyboardButton("➕↔", callback_data=f"add_same_{b['id']}"),
         ])
     rows.append([InlineKeyboardButton("➕ إضافة في النهاية", callback_data=f"add_{ctx}")])
+    if len(btns) >= 2:
+        rows.append([InlineKeyboardButton("🔀 تبديل موضع زرين", callback_data=f"swp_start_{ctx}")])
     if pid is not None:
         b = get_btn(pid); back = b["parent_id"] if b else None
         rows.append([InlineKeyboardButton("🔙 رجوع", callback_data="m_r" if back is None else f"m_{back}")])
+    return InlineKeyboardMarkup(rows)
+
+def kb_swap_select(pid=None, first_bid=None):
+    """لوحة اختيار الزر للتبديل."""
+    btns = get_buttons(pid)
+    ctx = "r" if pid is None else str(pid)
+    rows = []
+    for b in btns:
+        if first_bid is None:
+            rows.append([InlineKeyboardButton(b['label'], callback_data=f"swp1_{b['id']}")])
+        elif b['id'] == first_bid:
+            rows.append([InlineKeyboardButton(f"✅ {b['label']}", callback_data="noop")])
+        else:
+            rows.append([InlineKeyboardButton(b['label'], callback_data=f"swp2_{first_bid}_{b['id']}")])
+    rows.append([InlineKeyboardButton("❌ إلغاء", callback_data=f"m_r" if pid is None else f"m_{pid}")])
     return InlineKeyboardMarkup(rows)
 
 def kb_edit_menu_btn(bid):
@@ -429,6 +444,13 @@ async def on_message(update: Update, ctx):
 
     # ── أزرار المشرف ──────────────────────────────────────────────
     if is_admin(uid):
+        if text == BTN_SWAP:
+            btns = get_buttons(pid)
+            if len(btns) < 2:
+                await m.reply_text("⚠️ يجب أن يكون هناك زران على الأقل للتبديل.")
+            else:
+                await set_panel(ctx, chat_id, "🔀 *اختر الزر الأول:*", kb_swap_select(pid))
+            return
         if text == BTN_MANAGE:
             await set_panel(ctx, chat_id, "⚙️ *إدارة الأزرار*:", kb_manage(pid))
             return
@@ -501,12 +523,27 @@ async def cb_manage(update: Update, ctx):
                                       reply_markup=kb_edit_menu_btn(bid))
         return
 
-    # ── تحريك الأزرار ─────────────────────────────────────────────
-    if d.startswith("u_") or d.startswith("d_"):
-        up = d.startswith("u_"); bid = int(d[2:])
-        move_btn(bid, "up" if up else "down")
-        b = get_btn(bid)
-        await q.edit_message_reply_markup(reply_markup=kb_manage(b["parent_id"])); return
+    # ── تبديل موضع زرين ──────────────────────────────────────────
+    if d.startswith("swp_start_"):
+        pctx = d[10:]; ep = None if pctx == "r" else int(pctx)
+        await q.edit_message_text("🔀 *اختر الزر الأول:*", parse_mode="Markdown",
+                                  reply_markup=kb_swap_select(ep)); return
+
+    if d.startswith("swp1_"):
+        bid1 = int(d[5:]); b = get_btn(bid1)
+        ep = b["parent_id"] if b else None
+        await q.edit_message_text(f"🔀 *الزر الأول: {b['label']}*\n\nاختر الزر الثاني:",
+                                  parse_mode="Markdown",
+                                  reply_markup=kb_swap_select(ep, first_bid=bid1)); return
+
+    if d.startswith("swp2_"):
+        parts = d[5:].split("_"); bid1 = int(parts[0]); bid2 = int(parts[1])
+        b1 = get_btn(bid1); b2 = get_btn(bid2)
+        swap_btns(bid1, bid2)
+        ep = b1["parent_id"] if b1 else None
+        await q.edit_message_text(
+            f"✅ تم تبديل موضع *{b1['label']}* و *{b2['label']}*",
+            parse_mode="Markdown", reply_markup=kb_manage(ep)); return
 
     # ── حذف زر ────────────────────────────────────────────────────
     if d.startswith("x_"):
