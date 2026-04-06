@@ -1,7 +1,7 @@
 import logging
 import os
 import sqlite3
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
     ConversationHandler, MessageHandler, filters
@@ -24,6 +24,12 @@ TYPES = {
     "audio": "🎵 صوت",
 }
 ICONS = {"menu": "📂", "text": "📝", "photo": "🖼", "file": "📎", "video": "🎬", "audio": "🎵"}
+
+# نصوص أزرار كيبورد المشرف
+BTN_ADD     = "➕ إضافة زر"
+BTN_MANAGE  = "📋 إدارة الأزرار"
+BTN_ADMINS  = "👥 المشرفون"
+ADMIN_BTNS  = {BTN_ADD, BTN_MANAGE, BTN_ADMINS}
 
 # ── قاعدة البيانات ───────────────────────────────────────────────
 def db():
@@ -167,14 +173,25 @@ def kb_admins():
 
 def kb_cancel(): return InlineKeyboardMarkup([[InlineKeyboardButton("❌ إلغاء", callback_data="a_cancel")]])
 
+def kb_admin_reply():
+    return ReplyKeyboardMarkup(
+        [[BTN_ADD, BTN_MANAGE, BTN_ADMINS]],
+        resize_keyboard=True
+    )
+
 # ── أوامر المستخدم ───────────────────────────────────────────────
 async def cmd_start(update: Update, ctx):
+    uid = update.effective_user.id
+    if is_admin(uid):
+        await update.message.reply_text(
+            "🔧 أدوات المشرف جاهزة أسفل الشاشة.",
+            reply_markup=kb_admin_reply()
+        )
     btns = get_buttons()
-    kb = kb_user()
     if not btns:
         await update.message.reply_text("👋 أهلاً! لا توجد أزرار متاحة حالياً.")
         return
-    await update.message.reply_text("👋 أهلاً! اختر من القائمة:", reply_markup=kb)
+    await update.message.reply_text("👋 أهلاً! اختر من القائمة:", reply_markup=kb_user())
 
 async def cmd_myid(update: Update, ctx):
     u = update.effective_user
@@ -234,6 +251,27 @@ async def cb_user(update: Update, ctx):
 
     else:
         await q.edit_message_text("❌ لا يوجد محتوى.", reply_markup=back_kb)
+
+# ── معالج كيبورد المشرف ─────────────────────────────────────────
+async def on_admin_kb(update: Update, ctx):
+    uid = update.effective_user.id
+    if not is_admin(uid): return ConversationHandler.END
+    text = update.message.text
+
+    if text == BTN_ADD:
+        ctx.user_data["pctx"] = "root"
+        await update.message.reply_text("اختر نوع الزر:", reply_markup=kb_types("root"))
+        return MAIN
+
+    if text == BTN_MANAGE:
+        await update.message.reply_text("📋 القائمة الرئيسية:", reply_markup=kb_admin_list())
+        return MAIN
+
+    if text == BTN_ADMINS:
+        await update.message.reply_text(f"👥 المشرفون ({len(all_admins())}):", reply_markup=kb_admins())
+        return MAIN
+
+    return ConversationHandler.END
 
 # ── لوحة المشرف ─────────────────────────────────────────────────
 async def cmd_admin(update: Update, ctx):
@@ -405,24 +443,39 @@ def main():
     init_db()
     app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
 
+    admin_kb_filter = filters.Text(ADMIN_BTNS)
+
     admin_conv = ConversationHandler(
-        entry_points=[CommandHandler("admin", cmd_admin), CallbackQueryHandler(cb_admin, pattern="^a_")],
+        entry_points=[
+            CommandHandler("admin", cmd_admin),
+            CallbackQueryHandler(cb_admin, pattern="^a_"),
+            MessageHandler(admin_kb_filter, on_admin_kb),
+        ],
         states={
-            MAIN:             [CallbackQueryHandler(cb_admin, pattern="^a_")],
-            WAIT_LABEL:       [MessageHandler(filters.TEXT & ~filters.COMMAND, on_label),
+            MAIN:             [CallbackQueryHandler(cb_admin, pattern="^a_"),
+                               MessageHandler(admin_kb_filter, on_admin_kb)],
+            WAIT_LABEL:       [MessageHandler(filters.TEXT & ~filters.COMMAND & ~admin_kb_filter, on_label),
+                               MessageHandler(admin_kb_filter, on_admin_kb),
                                CallbackQueryHandler(cb_admin, pattern="^a_cancel")],
             WAIT_CONTENT:     [MessageHandler((filters.TEXT | filters.PHOTO | filters.Document.ALL |
-                                               filters.VIDEO | filters.AUDIO | filters.VOICE) & ~filters.COMMAND, on_content),
+                                               filters.VIDEO | filters.AUDIO | filters.VOICE) & ~filters.COMMAND & ~admin_kb_filter, on_content),
+                               MessageHandler(admin_kb_filter, on_admin_kb),
                                CallbackQueryHandler(cb_admin, pattern="^a_cancel")],
-            WAIT_ADMIN_ID:    [MessageHandler(filters.TEXT & ~filters.COMMAND, on_admin_id),
+            WAIT_ADMIN_ID:    [MessageHandler(filters.TEXT & ~filters.COMMAND & ~admin_kb_filter, on_admin_id),
+                               MessageHandler(admin_kb_filter, on_admin_kb),
                                CallbackQueryHandler(cb_admin, pattern="^a_cancel")],
-            WAIT_EDIT_LABEL:  [MessageHandler(filters.TEXT & ~filters.COMMAND, on_edit_label),
+            WAIT_EDIT_LABEL:  [MessageHandler(filters.TEXT & ~filters.COMMAND & ~admin_kb_filter, on_edit_label),
+                               MessageHandler(admin_kb_filter, on_admin_kb),
                                CallbackQueryHandler(cb_admin, pattern="^a_cancel")],
             WAIT_EDIT_CONTENT:[MessageHandler((filters.TEXT | filters.PHOTO | filters.Document.ALL |
-                                               filters.VIDEO | filters.AUDIO | filters.VOICE) & ~filters.COMMAND, on_edit_content),
+                                               filters.VIDEO | filters.AUDIO | filters.VOICE) & ~filters.COMMAND & ~admin_kb_filter, on_edit_content),
+                               MessageHandler(admin_kb_filter, on_admin_kb),
                                CallbackQueryHandler(cb_admin, pattern="^a_cancel")],
         },
-        fallbacks=[CommandHandler("admin", cmd_admin)],
+        fallbacks=[
+            CommandHandler("admin", cmd_admin),
+            MessageHandler(admin_kb_filter, on_admin_kb),
+        ],
         per_message=False,
     )
 
