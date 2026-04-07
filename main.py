@@ -450,12 +450,23 @@ async def on_message(update: Update, ctx):
             await m.reply_text("❌ لم يُعَيَّن أي مفتاح AI.")
             return
         wait_msg = await m.reply_text("⏳ جاري التواصل مع الذكاء الاصطناعي...")
-        buttons, error = await generate_buttons(request_text)
+        current_btns = get_buttons(pid)
+        buttons, insert, error = await generate_buttons(request_text, current_btns)
         if error:
             await wait_msg.edit_text(error)
             return
+        # ── تحديد نقطة الإدراج ────────────────────────────────────
+        if insert == "start":
+            anchor_id = None        # add_btn_after(None) = في البداية
+            use_after = True
+        elif isinstance(insert, int) and 0 <= insert < len(current_btns):
+            anchor_id = current_btns[insert]["id"]
+            use_after = True
+        else:
+            anchor_id = None
+            use_after = False       # add_btn = في النهاية
         added = []
-        last_id = None
+        last_id = anchor_id
         for btn in buttons:
             label = btn.get("label", "").strip()
             btype = btn.get("type", "menu")
@@ -464,10 +475,12 @@ async def on_message(update: Update, ctx):
                 continue
             if btype not in ("menu", "content"):
                 btype = "menu"
-            if last_id is None:
+            nr = 0 if not new_row else 1
+            if last_id is None and not use_after:
                 last_id = add_btn(pid, btype, label)
             else:
-                last_id = add_btn_after(last_id, pid, btype, label, new_row=0 if not new_row else 1)
+                last_id = add_btn_after(last_id, pid, btype, label, new_row=nr)
+            use_after = True        # الأزرار التالية دائماً تُدرج بعد السابق
             added.append(f"{'📂' if btype == 'menu' else '📄'} {label}")
         if not added:
             await wait_msg.edit_text("⚠️ لم تُضَف أي أزرار.")
@@ -720,49 +733,49 @@ async def cb_manage(update: Update, ctx):
 # ── خاصية الذكاء الاصطناعي (Gemini) ─────────────────────────────
 AI_SYSTEM_PROMPT = """أنت مساعد ذكي لبوت تلغرام يدير قوائم وأزرار تفاعلية.
 
-مهمتك الوحيدة: تحليل أي رسالة يرسلها المشرف وتحويلها إلى أزرار مناسبة، ثم إرجاع JSON فقط بهذا الشكل بدون أي نص إضافي أبداً:
-{"buttons": [{"label": "اسم الزر", "type": "menu", "new_row": true}]}
+مهمتك: تحليل طلب المشرف والأزرار الحالية الموجودة، ثم إرجاع JSON فقط بهذا الشكل بدون أي نص إضافي:
+{
+  "insert_after_index": -1,
+  "buttons": [{"label": "اسم الزر", "type": "menu", "new_row": true}]
+}
 
-قواعد التحليل:
-- افهم النية من أي وصف مهما كان بسيطاً أو معقداً أو غير مباشر.
-- إذا ذكر المشرف موضوعاً أو مجالاً (مثل: مطعم، متجر، خدمات، أخبار...) أنشئ أزرار منطقية مناسبة له تلقائياً.
-- إذا ذكر عدد الأزرار فقط، ابتكر أسماء منطقية مناسبة للسياق.
-- إذا كان الطلب غامضاً، افترض نية إيجابية وأنشئ أزرار عامة مفيدة.
+شرح insert_after_index:
+- رقم من 0 إلى N-1 (حيث N = عدد الأزرار الحالية): أضف الأزرار الجديدة بعد الزر رقم X في القائمة الحالية.
+- -1: أضف في النهاية (الافتراضي إن لم يُحدد مكان).
+- "start": أضف في البداية قبل كل الأزرار.
+- إذا قال المشرف "السطر الثاني" والأزرار الحالية لديها سطر أول يحتوي N زر، احسب الفهرس بعد آخر زر في السطر الأول.
+- إذا طلب وضعها بعد زر معين بالاسم، ابحث عن فهرسه واستخدمه.
+- إذا طلب إبقاء الأزرار الحالية في مكانها وإضافة الجديدة بموضع محدد، احسب الفهرس الصحيح.
 
 قواعد الأزرار:
-- type = "menu" إذا كان الزر يفتح قائمة فرعية (تصنيفات، أقسام، مجموعات).
-- type = "content" إذا كان الزر يعرض معلومة مباشرة (تواصل، سعر، موقع، وصف).
+- type = "menu": الزر يفتح قائمة فرعية.
+- type = "content": الزر يعرض معلومة مباشرة.
 
-قاعدة new_row (مهمة جداً):
-- new_row = true: الزر يبدأ سطراً جديداً بمفرده.
-- new_row = false: الزر يُوضع في نفس السطر مع الزر الذي قبله (جنباً لجنب).
-- الزر الأول دائماً new_row = true.
-- إذا طلب المشرف أن يكون زران "بنفس السطر" أو "جنباً لجنب" أو "بسطر واحد": الأول new_row=true والثاني new_row=false.
-- إذا طلب المشرف أن يكون كل زر "بسطر منفصل" أو "كل واحد لوحده": الكل new_row=true.
-- الأزرار القصيرة يمكن وضع 2-3 منها بسطر واحد (new_row: false للثاني والثالث).
-- الأزرار الطويلة تحتاج سطراً منفرداً (new_row: true).
+قاعدة new_row:
+- new_row = true: الزر يبدأ سطراً جديداً.
+- new_row = false: الزر يُضاف بجانب الزر السابق في نفس السطر.
+- الزر الأول في المجموعة الجديدة دائماً new_row = true.
+- إذا طلب "بنفس السطر" أو "جنباً لجنب": الأول true والباقي false.
+- الأزرار القصيرة: يمكن 2-3 بسطر (new_row: false للثاني والثالث).
 
-مثال زران بنفس السطر:
-{"buttons": [{"label": "نعم", "type": "content", "new_row": true}, {"label": "لا", "type": "content", "new_row": false}]}
+قواعد التحليل:
+- افهم النية من أي وصف طبيعي مهما كان.
+- إذا ذكر موضوعاً (مطعم، متجر، خدمات...) أنشئ أزرار مناسبة له.
+- إذا ذكر عدداً فقط، ابتكر أسماء منطقية.
 
-أمثلة على طلبات يجب أن تفهمها:
-- "عندي مطعم" → أزرار: القائمة، العروض، التوصيل، تواصل معنا
-- "5 أزرار للرياضة" → أزرار رياضية منطقية
-- "أزرار للمتجر" → المنتجات، الطلبات، العروض، الدعم
-- "قائمة بسيطة" → أزرار رئيسية عامة
-- "أضف خدماتنا ومن نحن وتواصل" → يستخرج الأزرار مباشرة
-
-أرجع JSON صالح فقط، لا شرح ولا نص خارج JSON."""
+أرجع JSON صالح فقط بدون أي نص خارجه."""
 
 def _parse_ai_response(raw: str):
-    """يستخرج قائمة الأزرار من نص JSON مع تنظيف markdown."""
+    """يستخرج قائمة الأزرار وموضع الإدراج من نص JSON."""
     raw = raw.strip()
     if raw.startswith("```"):
         raw = raw.split("```")[1]
         if raw.startswith("json"):
             raw = raw[4:]
     data = json.loads(raw.strip())
-    return data.get("buttons", [])
+    buttons = data.get("buttons", [])
+    insert = data.get("insert_after_index", -1)
+    return buttons, insert
 
 async def _call_groq(client: httpx.AsyncClient, prompt: str):
     """يستدعي Groq API."""
@@ -793,21 +806,33 @@ async def _call_gemini(client: httpx.AsyncClient, prompt: str):
         return resp.json()["candidates"][0]["content"]["parts"][0]["text"]
     return None
 
-async def generate_buttons(user_request: str):
-    """يجرب Groq أولاً ثم Gemini كاحتياط."""
+async def generate_buttons(user_request: str, current_btns: list = None):
+    """يجرب Groq أولاً ثم Gemini كاحتياط. يُرجع (buttons, insert_after_id, error)."""
     if not GROQ_API_KEY and not GEMINI_API_KEY:
-        return None, "❌ لم يُعَيَّن أي مفتاح AI (GROQ_API_KEY أو GEMINI_API_KEY)."
-    prompt = f"{AI_SYSTEM_PROMPT}\n\nطلب المشرف: {user_request}"
+        return None, -1, "❌ لم يُعَيَّن أي مفتاح AI (GROQ_API_KEY أو GEMINI_API_KEY)."
+
+    # ── بناء سياق الأزرار الحالية ─────────────────────────────────
+    if current_btns:
+        ctx_lines = [f"الأزرار الحالية الموجودة ({len(current_btns)} زر):"]
+        for i, b in enumerate(current_btns):
+            row_info = "بداية سطر جديد" if b.get("new_row", 1) else "بجانب السابق"
+            ctx_lines.append(f"  [{i}] \"{b['label']}\" ({b['type']}) - {row_info}")
+        ctx_text = "\n".join(ctx_lines)
+    else:
+        ctx_text = "لا توجد أزرار حالية (القائمة فارغة)."
+
+    prompt = f"{AI_SYSTEM_PROMPT}\n\n{ctx_text}\n\nطلب المشرف: {user_request}"
+
     async with httpx.AsyncClient() as client:
         # ── Groq أولاً ────────────────────────────────────────────
         if GROQ_API_KEY:
             try:
                 raw = await _call_groq(client, prompt)
-                buttons = _parse_ai_response(raw)
+                buttons, insert = _parse_ai_response(raw)
                 if buttons:
-                    return buttons, None
+                    return buttons, insert, None
             except json.JSONDecodeError:
-                return None, "⚠️ لم أتمكن من تفسير رد الذكاء الاصطناعي. حاول مرة أخرى."
+                return None, -1, "⚠️ لم أتمكن من تفسير رد الذكاء الاصطناعي. حاول مرة أخرى."
             except httpx.HTTPStatusError as e:
                 logging.warning(f"Groq error {e.response.status_code}: {e.response.text[:200]}")
             except Exception as e:
@@ -817,14 +842,14 @@ async def generate_buttons(user_request: str):
             try:
                 raw = await _call_gemini(client, prompt)
                 if raw:
-                    buttons = _parse_ai_response(raw)
+                    buttons, insert = _parse_ai_response(raw)
                     if buttons:
-                        return buttons, None
+                        return buttons, insert, None
             except json.JSONDecodeError:
-                return None, "⚠️ لم أتمكن من تفسير رد الذكاء الاصطناعي. حاول مرة أخرى."
+                return None, -1, "⚠️ لم أتمكن من تفسير رد الذكاء الاصطناعي. حاول مرة أخرى."
             except Exception as e:
                 logging.warning(f"Gemini exception: {e}")
-    return None, "⚠️ تعذّر الاتصال بالذكاء الاصطناعي. حاول مرة أخرى."
+    return None, -1, "⚠️ تعذّر الاتصال بالذكاء الاصطناعي. حاول مرة أخرى."
 
 # ── إعداد البوت ──────────────────────────────────────────────────
 async def post_init(app):
