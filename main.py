@@ -12,7 +12,7 @@ BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 DB = "data.db"
 
-GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
+GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-8b:generateContent"
 
 BTN_BACK   = "🔙 رجوع"
 BTN_ADD    = "➕ إضافة"
@@ -752,7 +752,12 @@ async def gemini_generate_buttons(user_request: str):
         return None, "⚠️ لم أتمكن من تفسير رد الذكاء الاصطناعي. حاول مرة أخرى."
     except httpx.HTTPStatusError as e:
         logging.error(f"Gemini HTTP error: {e.response.text}")
-        return None, f"❌ خطأ في الاتصال بـ Gemini: {e.response.status_code}"
+        code = e.response.status_code
+        if code == 429:
+            return None, "⚠️ تجاوزت الحصة المجانية لـ Gemini. انتظر دقيقة ثم حاول مجدداً، أو تحقق من خطة مفتاح API."
+        if code == 401 or code == 403:
+            return None, "❌ مفتاح Gemini API غير صالح أو لا يملك صلاحية."
+        return None, f"❌ خطأ في الاتصال بـ Gemini: {code}"
     except Exception as e:
         logging.error(f"Gemini error: {e}")
         return None, f"❌ خطأ في الاتصال بـ Gemini: {str(e)[:100]}"
