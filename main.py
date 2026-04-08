@@ -625,6 +625,9 @@ async def on_message(update: Update, ctx):
             b = get_btn(pid); new_pid = b["parent_id"] if b else None
             ctx.user_data["pid"] = new_pid
             await m.reply_text("🔙", reply_markup=build_kb(uid, new_pid))
+        else:
+            ctx.user_data["pid"] = None
+            await m.reply_text("🔙", reply_markup=build_kb(uid, None))
         return
 
     # ── أزرار المشرف ──────────────────────────────────────────────
@@ -645,10 +648,16 @@ async def on_message(update: Update, ctx):
 
     # ── ضغط زر من القائمة ─────────────────────────────────────────
     btns = get_buttons(pid)
-    matched = next((b for b in btns
-                    if b['label'] == text), None)
+    matched = next((b for b in btns if b['label'] == text), None)
     if not matched:
-        return
+        # البوت أُعيد تشغيله وضاع الموقع، نبحث في كل الأزرار
+        all_btns = [dict(r) for r in db().execute(
+            "SELECT * FROM buttons WHERE label=?", (text,)).fetchall()]
+        if all_btns:
+            matched = all_btns[0]
+            ctx.user_data["pid"] = matched.get("parent_id")
+        else:
+            return
 
     b = matched
     if b["type"] == "menu":
