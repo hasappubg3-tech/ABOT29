@@ -37,24 +37,25 @@ BTN_PLUS = "➕"
 SPECIAL_BTNS = {BTN_BACK, BTN_ADD, BTN_MANAGE, BTN_ADMINS, BTN_CANCEL, BTN_SWAP, BTN_PLUS,
                 "📂 قائمة", "📄 محتوى"}
 
-_PZ = "\u200b"  # صفر — غير مرئي
-_PO = "\u200c"  # واحد — غير مرئي
+_SUP_DIGITS = "⁰¹²³⁴⁵⁶⁷⁸⁹"
+_SUP_MAP    = {c: str(i) for i, c in enumerate(_SUP_DIGITS)}
 
 def _plus_label(bid: int) -> str:
-    """يُنشئ نص زر ➕ يحتوي رقم الزر مخفياً بأحرف غير مرئية."""
-    bits = format(bid, 'b')
-    return BTN_PLUS + ''.join(_PO if b == '1' else _PZ for b in bits)
+    """يُنشئ نص زر ➕ + رقم الزر بأرقام فوقية مثل ➕⁵."""
+    return BTN_PLUS + ''.join(_SUP_DIGITS[int(d)] for d in str(bid))
 
 def _parse_plus(text: str):
-    """يُعيد bid إذا كان النص زر ➕ مشفّر، وإلا None."""
+    """يُعيد bid إذا كان النص زر ➕ مع أرقام فوقية، وإلا None."""
     if not text.startswith(BTN_PLUS):
         return None
-    encoded = text[len(BTN_PLUS):]
-    if not encoded:
+    rest = text[len(BTN_PLUS):]
+    if not rest:
+        return None
+    digits = ''.join(_SUP_MAP.get(c, '') for c in rest)
+    if not digits:
         return None
     try:
-        bits = ''.join('1' if c == _PO else '0' for c in encoded)
-        return int(bits, 2)
+        return int(digits)
     except Exception:
         return None
 
