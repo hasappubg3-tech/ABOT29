@@ -349,7 +349,7 @@ def kb_manage(pid=None):
     for b in btns:
         rows.append([
             InlineKeyboardButton(b['label'], callback_data=f"e_{b['id']}"),
-            InlineKeyboardButton("🗑", callback_data=f"x_{b['id']}"),
+            InlineKeyboardButton("🗑", callback_data=f"confirm_x_{b['id']}"),
             InlineKeyboardButton("➕", callback_data=f"plus_{b['id']}"),
         ])
     rows.append([InlineKeyboardButton("➕ إضافة", callback_data=f"plus_e_{ctx}")])
@@ -392,7 +392,7 @@ def kb_edit_menu_btn(bid):
     rows = [
         [InlineKeyboardButton("📂 فتح القائمة", callback_data=f"m_{bid}")],
         [InlineKeyboardButton("✏️ تغيير الاسم", callback_data=f"el_{bid}")],
-        [InlineKeyboardButton("🗑 حذف",          callback_data=f"x_{bid}")],
+        [InlineKeyboardButton("🗑 حذف",          callback_data=f"confirm_x_{bid}")],
     ]
     pid = b["parent_id"] if b else None
     rows.append([InlineKeyboardButton("🔙 رجوع", callback_data="m_r" if pid is None else f"m_{pid}")])
@@ -407,7 +407,7 @@ def kb_content_panel(bid):
         rows.append([InlineKeyboardButton("👁 عرض المحتوى", callback_data=f"ci_view_{bid}")])
     rows.append([InlineKeyboardButton("➕ إضافة محتوى", callback_data=f"ci_add_{bid}")])
     rows.append([InlineKeyboardButton("✏️ تغيير الاسم", callback_data=f"el_{bid}")])
-    rows.append([InlineKeyboardButton("🗑 حذف الزر",    callback_data=f"x_{bid}")])
+    rows.append([InlineKeyboardButton("🗑 حذف الزر",    callback_data=f"confirm_x_{bid}")])
     pid = b["parent_id"] if b else None
     rows.append([InlineKeyboardButton("🔙 رجوع", callback_data="m_r" if pid is None else f"m_{pid}")])
     return InlineKeyboardMarkup(rows)
@@ -419,7 +419,7 @@ def kb_menu_quick(bid):
     siblings = get_buttons(pid)
     rows = [
         [InlineKeyboardButton("✏️ تغيير الاسم", callback_data=f"el_{bid}")],
-        [InlineKeyboardButton("🗑 حذف",          callback_data=f"x_{bid}")],
+        [InlineKeyboardButton("🗑 حذف",          callback_data=f"confirm_x_{bid}")],
     ]
     if len(siblings) >= 2:
         rows.append([InlineKeyboardButton("🔀 تبديل الموضع", callback_data=f"swp_start_{'r' if pid is None else str(pid)}")])
@@ -433,7 +433,7 @@ def kb_content_quick(bid):
         rows.append([InlineKeyboardButton("👁 عرض المحتوى", callback_data=f"ci_view_{bid}")])
     rows.append([InlineKeyboardButton("➕ إضافة محتوى", callback_data=f"ci_add_{bid}")])
     rows.append([InlineKeyboardButton("✏️ تغيير الاسم", callback_data=f"el_{bid}")])
-    rows.append([InlineKeyboardButton("🗑 حذف",          callback_data=f"x_{bid}")])
+    rows.append([InlineKeyboardButton("🗑 حذف",          callback_data=f"confirm_x_{bid}")])
     return InlineKeyboardMarkup(rows)
 
 def kb_item_actions(iid):
@@ -456,6 +456,15 @@ def kb_admins_inline():
 
 def kb_cancel_inline():
     return InlineKeyboardMarkup([[InlineKeyboardButton("❌ إلغاء", callback_data="cancel")]])
+
+def kb_confirm_delete(bid):
+    b = get_btn(bid)
+    pid = b["parent_id"] if b else None
+    back_cb = "m_r" if pid is None else f"m_{pid}"
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ موافق", callback_data=f"x_{bid}"),
+        InlineKeyboardButton("❌ إلغاء", callback_data=back_cb),
+    ]])
 
 
 # ── مساعد اللوحة الثابتة ─────────────────────────────────────────
@@ -788,6 +797,17 @@ async def cb_manage(update: Update, ctx):
         await q.edit_message_text(
             f"✅ تم تبديل موضع *{b1['label']}* و *{b2['label']}*",
             parse_mode="Markdown", reply_markup=kb_manage(ep)); return
+
+    # ── تأكيد حذف زر ──────────────────────────────────────────────
+    if d.startswith("confirm_x_"):
+        bid = int(d[10:]); b = get_btn(bid)
+        label = b["label"] if b else "؟"
+        await q.edit_message_text(
+            f"⚠️ هل أنت متأكد من حذف الزر *{label}*؟",
+            parse_mode="Markdown",
+            reply_markup=kb_confirm_delete(bid)
+        )
+        return
 
     # ── حذف زر ────────────────────────────────────────────────────
     if d.startswith("x_"):
