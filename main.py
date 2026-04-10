@@ -1421,7 +1421,7 @@ async def cb_manage(update: Update, ctx):
                     chat_id=q.message.chat_id,
                     text="👌 *حسناً!*\n\nيمكنك الاستمرار في التصفح.",
                     parse_mode="Markdown",
-                    api_kwargs={"message_effect_id": "5044134455711629726"}
+                    api_kwargs={"message_effect_id": "5046509860389126442"}
                 )
             except Exception:
                 try:
