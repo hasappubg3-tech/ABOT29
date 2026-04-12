@@ -699,8 +699,6 @@ ICON = {"menu": "📂", "content": "📄", "special": "⭐"}
 def build_kb(uid, pid=None):
     btns = get_buttons(pid)
     admin = is_admin(uid)
-    if not admin:
-        btns = [b for b in btns if b.get("type") != "special"]
     rows = []
     current_row = []
     last_bid_in_row = None
@@ -869,6 +867,16 @@ def kb_content_quick(bid):
     rows.append([InlineKeyboardButton("🗑 حذف",          callback_data=f"confirm_x_{bid}")])
     return InlineKeyboardMarkup(rows)
 
+def kb_special_quick(bid):
+    """خيارات سريعة لزر مميز عند ضغط الأدمن عليه من الكيبورد."""
+    b = get_btn(bid)
+    pid = b["parent_id"] if b else None
+    rows = [
+        [InlineKeyboardButton("✏️ تغيير الاسم", callback_data=f"el_{bid}")],
+        [InlineKeyboardButton("🗑 حذف",          callback_data=f"confirm_x_{bid}")],
+    ]
+    return InlineKeyboardMarkup(rows)
+
 def kb_item_actions(iid):
     """أزرار تحت كل عنصر محتوى عند العرض."""
     return InlineKeyboardMarkup([[
@@ -987,19 +995,11 @@ def kb_special_manage(bid):
     b = get_btn(bid)
     if not b:
         return InlineKeyboardMarkup([[InlineKeyboardButton("رجوع", callback_data="st_specials")]])
-    items = get_items(bid)
-    rows = []
-    if items:
-        rows.append([InlineKeyboardButton("👁 عرض المحتوى", callback_data=f"ci_view_{bid}")])
-    rows.append([InlineKeyboardButton("➕ إضافة محتوى", callback_data=f"ci_add_{bid}")])
-    global_cap = get_global_caption()
-    if global_cap:
-        no_cap = (b.get("no_caption", 0) or 0)
-        cap_label = "✅ تفعيل كليشة الكلام" if no_cap else "🚫 إلغاء كليشة الكلام"
-        rows.append([InlineKeyboardButton(cap_label, callback_data=f"ci_toggle_cap_{bid}")])
-    rows.append([InlineKeyboardButton("✏️ تغيير الاسم", callback_data=f"el_{bid}")])
-    rows.append([InlineKeyboardButton("🗑 حذف الزر",    callback_data=f"confirm_x_{bid}")])
-    rows.append([InlineKeyboardButton("رجوع", callback_data="st_specials")])
+    rows = [
+        [InlineKeyboardButton("✏️ تغيير الاسم", callback_data=f"el_{bid}")],
+        [InlineKeyboardButton("🗑 حذف الزر",    callback_data=f"confirm_x_{bid}")],
+        [InlineKeyboardButton("رجوع",           callback_data="st_specials")],
+    ]
     return InlineKeyboardMarkup(rows)
 
 def kb_caption_settings():
@@ -1318,8 +1318,8 @@ async def on_message(update: Update, ctx):
                             kb_content_panel(bid))
         elif t == "special":
             await set_panel(ctx, chat_id,
-                            f"⭐ *{text}* — مميز للمشرفين فقط\nرقم الزر: `{bid}`\n\nلا يوجد محتوى بعد.",
-                            kb_content_panel(bid))
+                            f"⭐ *{text}*\n🔢 رقم الزر (ID): `{bid}`\n\n_هذا الزر مخصص — سلوكه يُحدَّد برمجياً._",
+                            kb_special_manage(bid))
         return
 
     # ── انتظار محتوى جديد لزر موجود ──────────────────────────────
@@ -1820,10 +1820,9 @@ async def on_message(update: Update, ctx):
 
     elif b["type"] == "special":
         if is_admin(uid):
-            items = get_items(b["id"])
             await set_panel(ctx, chat_id,
-                            f"⭐ *{b['label']}* — مميز (#{b['id']})\n_{len(items)} عنصر_",
-                            kb_content_quick(b["id"]))
+                            f"⭐ *{b['label']}*\n🔢 رقم الزر (ID): `{b['id']}`\n\n_هذا الزر مخصص — سلوكه يُحدَّد برمجياً._",
+                            kb_special_quick(b["id"]))
 
 # ── معالج أزرار Inline ────────────────────────────────────────────
 async def cb_manage(update: Update, ctx):
@@ -2327,12 +2326,14 @@ async def cb_manage(update: Update, ctx):
 
     if d.startswith("m_"):
         ep = int(d[2:]); b = get_btn(ep)
-        if b and b["type"] in ("content", "special"):
+        if b and b["type"] == "content":
             items = get_items(ep)
-            prefix = "⭐" if b["type"] == "special" else "📄"
-            extra = f" (#{ep})" if b["type"] == "special" else ""
-            await q.edit_message_text(f"{prefix} *{b['label']}*{extra}\n_{len(items)} عنصر_",
+            await q.edit_message_text(f"📄 *{b['label']}*\n_{len(items)} عنصر_",
                                       parse_mode="Markdown", reply_markup=kb_content_panel(ep))
+        elif b and b["type"] == "special":
+            await q.edit_message_text(
+                f"⭐ *{b['label']}*\n🔢 رقم الزر (ID): `{ep}`\n\n_هذا الزر مخصص — سلوكه يُحدَّد برمجياً._",
+                parse_mode="Markdown", reply_markup=kb_special_manage(ep))
         else:
             await q.edit_message_text(f"📂 *{b['label']}*" if b else "⚙️ *إدارة الأزرار*:",
                                       parse_mode="Markdown", reply_markup=kb_manage(ep if b else None))
@@ -2347,9 +2348,9 @@ async def cb_manage(update: Update, ctx):
             await q.edit_message_text(f"📄 *{b['label']}*\n_{len(items)} عنصر_",
                                       parse_mode="Markdown", reply_markup=kb_content_panel(bid))
         elif b["type"] == "special":
-            items = get_items(bid)
-            await q.edit_message_text(f"⭐ *{b['label']}* (#{bid})\n_{len(items)} عنصر_",
-                                      parse_mode="Markdown", reply_markup=kb_content_panel(bid))
+            await q.edit_message_text(
+                f"⭐ *{b['label']}*\n🔢 رقم الزر (ID): `{bid}`\n\n_هذا الزر مخصص — سلوكه يُحدَّد برمجياً._",
+                parse_mode="Markdown", reply_markup=kb_special_manage(bid))
         else:
             await q.edit_message_text(f"📂 *{b['label']}*", parse_mode="Markdown",
                                       reply_markup=kb_edit_menu_btn(bid))
