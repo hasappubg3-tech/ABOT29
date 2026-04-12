@@ -667,8 +667,8 @@ def get_donation_thanks_message(stars: int = 0) -> str:
     stars_text = str(stars) if stars else "نجوم"
     return msg.replace("{stars}", stars_text)
 
-def kb_donation_stars():
-    return InlineKeyboardMarkup([
+def kb_donation_stars(uid=None):
+    rows = [
         [
             InlineKeyboardButton("10 ⭐", callback_data="don_amount_10"),
             InlineKeyboardButton("25 ⭐", callback_data="don_amount_25"),
@@ -679,8 +679,11 @@ def kb_donation_stars():
             InlineKeyboardButton("250 ⭐", callback_data="don_amount_250"),
         ],
         [InlineKeyboardButton("✏️ أكتب عدد النجوم", callback_data="don_custom")],
-        [InlineKeyboardButton("❌ إغلاق", callback_data="don_close")],
-    ])
+    ]
+    if uid is not None and is_admin(uid):
+        rows.append([InlineKeyboardButton("✏️ تعديل رسالة الشكر", callback_data="don_thanks_set")])
+    rows.append([InlineKeyboardButton("❌ إغلاق", callback_data="don_close")])
+    return InlineKeyboardMarkup(rows)
 
 async def send_stars_invoice(bot, chat_id: int, stars: int):
     await bot.send_invoice(
@@ -1098,7 +1101,6 @@ def kb_settings():
         [InlineKeyboardButton("🔥 الملفات الترند",                callback_data="st_trending_0")],
         [InlineKeyboardButton("📡 الإذاعة",                       callback_data="st_broadcast")],
         [InlineKeyboardButton("💬 العبارات التحفيزية",             callback_data="st_phrases")],
-        [InlineKeyboardButton("💝 رسالة شكر التبرع",               callback_data="st_donation_thanks")],
         [InlineKeyboardButton("⭐ الأزرار المميزة",                callback_data="st_specials")],
     ])
 
@@ -2081,7 +2083,7 @@ async def on_message(update: Update, ctx):
             await m.reply_text(
                 donation_text(),
                 parse_mode="Markdown",
-                reply_markup=kb_donation_stars()
+                reply_markup=kb_donation_stars(uid)
             )
             if is_admin(uid):
                 await set_panel(ctx, chat_id,
@@ -2201,7 +2203,23 @@ async def cb_manage(update: Update, ctx):
 
         if d == "don_cancel":
             ctx.user_data.pop("state", None)
-            await q.edit_message_text(donation_text(), parse_mode="Markdown", reply_markup=kb_donation_stars())
+            await q.edit_message_text(donation_text(), parse_mode="Markdown", reply_markup=kb_donation_stars(uid))
+            return
+
+        if d == "don_thanks_set":
+            if not is_admin(uid):
+                await q.answer("هذا الخيار للمشرفين فقط.", show_alert=True); return
+            ctx.user_data["state"] = "wait_donation_thanks"
+            await q.edit_message_text(
+                "✏️ أرسل رسالة الشكر الجديدة.\n\n"
+                "استخدم `{stars}` حتى يظهر عدد النجوم داخل الرسالة.\n"
+                "مثال:\n"
+                "شكراً لدعمك بـ {stars} نجمة، وجودك يسعدنا!",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("❌ إلغاء", callback_data="don_cancel")
+                ]])
+            )
             return
 
         if d == "don_close":
