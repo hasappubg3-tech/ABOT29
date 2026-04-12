@@ -611,6 +611,30 @@ def save_pomodoro_settings(uid: int, enabled=None, study_min=None, break_min=Non
     )
     c.commit(); c.close()
 
+def parse_pomodoro_minutes(text: str, max_minutes: int = 240):
+    if not text:
+        return None
+    import re
+    match = re.search(r"\d+", text.strip())
+    if not match:
+        return None
+    try:
+        val = int(match.group(0))
+    except Exception:
+        return None
+    if val < 1 or val > max_minutes:
+        return None
+    return val
+
+def pomodoro_settings_text(uid: int) -> str:
+    s = get_pomodoro_settings(uid)
+    status = "✅ مفعّل" if s["enabled"] else "❌ موقف"
+    return (
+        f"🍅 *مؤقت الدراسة (بومودورو)*\n\n"
+        f"⏱ الوضع: {s['study_min']} دراسة + {s['break_min']} استراحة\n"
+        f"الحالة: {status}"
+    )
+
 def _setup_pomodoro_feature():
     """يضبط زر 421 كحاوية وينشئ زر البومودورو داخله إن لم يكن موجوداً."""
     c = db()
@@ -963,6 +987,7 @@ def kb_pomodoro_settings(uid: int, show_modes: bool = False):
             rows.append([InlineKeyboardButton(
                 f"{check}{lbl}", callback_data=f"pom_mode_{sm}_{bm}"
             )])
+        rows.append([InlineKeyboardButton("✏️ تخصيص وقت الدراسة والاستراحة", callback_data="pom_custom")])
         rows.append([InlineKeyboardButton("▶️ ابدأ جلسة دراسة", callback_data="pom_start")])
     rows.append([InlineKeyboardButton("❌ إغلاق", callback_data="pom_close")])
     return InlineKeyboardMarkup(rows)
@@ -1623,6 +1648,36 @@ async def on_message(update: Update, ctx):
         await m.reply_text("✅", reply_markup=build_kb(uid, pid))
         return
 
+    if state == "wait_pom_study_min":
+        val = parse_pomodoro_minutes(text)
+        if val is None:
+            await m.reply_text("⚠️ أرسل وقت الدراسة بالدقائق كرقم بين 1 و 240."); return
+        ctx.user_data["pom_custom_study"] = val
+        ctx.user_data["state"] = "wait_pom_break_min"
+        await m.reply_text(
+            f"✅ وقت الدراسة: *{val} دقيقة*\n\nأرسل الآن وقت الاستراحة بالدقائق:",
+            parse_mode="Markdown"
+        )
+        return
+
+    if state == "wait_pom_break_min":
+        val = parse_pomodoro_minutes(text, max_minutes=120)
+        if val is None:
+            await m.reply_text("⚠️ أرسل وقت الاستراحة بالدقائق كرقم بين 1 و 120."); return
+        study = ctx.user_data.pop("pom_custom_study", None)
+        ctx.user_data.pop("state", None)
+        if study is None:
+            await m.reply_text("⚠️ انتهت عملية التخصيص. اضغط زر التخصيص مرة ثانية."); return
+        save_pomodoro_settings(uid, study_min=study, break_min=val)
+        await m.reply_text(
+            f"✅ تم حفظ الوقت المخصص:\n\n"
+            f"📚 الدراسة: *{study} دقيقة*\n"
+            f"🧘 الاستراحة: *{val} دقيقة*",
+            parse_mode="Markdown",
+            reply_markup=kb_pomodoro_settings(uid)
+        )
+        return
+
     # ── انتظار اسم جديد للتعديل ───────────────────────────────────
     if state == "wait_edit_label":
         if not text or text in SPECIAL_BTNS:
@@ -1918,12 +1973,8 @@ async def on_message(update: Update, ctx):
                                 f"⭐ *{b['label']}* — حاوية (#{b['id']})",
                                 kb_special_container_quick(b["id"]))
         elif action == "pomodoro":
-            s = get_pomodoro_settings(uid)
-            status = "✅ مفعّل" if s["enabled"] else "❌ موقف"
             await m.reply_text(
-                f"🍅 *مؤقت الدراسة (بومودورو)*\n\n"
-                f"⏱ الوضع: {s['study_min']} دراسة + {s['break_min']} استراحة\n"
-                f"الحالة: {status}",
+                pomodoro_settings_text(uid),
                 parse_mode="Markdown",
                 reply_markup=kb_pomodoro_settings(uid)
             )
@@ -2026,12 +2077,8 @@ async def cb_manage(update: Update, ctx):
         if d == "pom_toggle":
             s = get_pomodoro_settings(uid)
             save_pomodoro_settings(uid, enabled=0 if s["enabled"] else 1)
-            s2 = get_pomodoro_settings(uid)
-            status = "✅ مفعّل" if s2["enabled"] else "❌ موقف"
             await q.edit_message_text(
-                f"🍅 *مؤقت الدراسة (بومودورو)*\n\n"
-                f"⏱ الوضع: {s2['study_min']} دراسة + {s2['break_min']} استراحة\n"
-                f"الحالة: {status}",
+                pomodoro_settings_text(uid),
                 parse_mode="Markdown",
                 reply_markup=kb_pomodoro_settings(uid)
             )
@@ -2041,12 +2088,30 @@ async def cb_manage(update: Update, ctx):
             parts = d[9:].split("_")
             sm, bm = int(parts[0]), int(parts[1])
             save_pomodoro_settings(uid, study_min=sm, break_min=bm)
-            s2 = get_pomodoro_settings(uid)
-            status = "✅ مفعّل" if s2["enabled"] else "❌ موقف"
             await q.edit_message_text(
-                f"🍅 *مؤقت الدراسة (بومودورو)*\n\n"
-                f"⏱ الوضع: {sm} دراسة + {bm} استراحة\n"
-                f"الحالة: {status}",
+                pomodoro_settings_text(uid),
+                parse_mode="Markdown",
+                reply_markup=kb_pomodoro_settings(uid)
+            )
+            return
+
+        if d == "pom_custom":
+            ctx.user_data["state"] = "wait_pom_study_min"
+            ctx.user_data.pop("pom_custom_study", None)
+            await q.edit_message_text(
+                "✏️ *تخصيص مؤقت الدراسة*\n\nأرسل وقت الدراسة بالدقائق، مثال: `30`",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("❌ إلغاء", callback_data="pom_custom_cancel")
+                ]])
+            )
+            return
+
+        if d == "pom_custom_cancel":
+            ctx.user_data.pop("state", None)
+            ctx.user_data.pop("pom_custom_study", None)
+            await q.edit_message_text(
+                pomodoro_settings_text(uid),
                 parse_mode="Markdown",
                 reply_markup=kb_pomodoro_settings(uid)
             )
