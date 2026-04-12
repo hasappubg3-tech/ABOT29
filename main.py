@@ -179,7 +179,20 @@ def init_db():
                 phrase TEXT NOT NULL
             );
         """)
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS pomodoro_settings (
+                user_id   INTEGER PRIMARY KEY,
+                enabled   INTEGER DEFAULT 1,
+                study_min INTEGER DEFAULT 25,
+                break_min INTEGER DEFAULT 5
+            );
+        """)
         c.commit()
+        try:
+            c.execute("ALTER TABLE buttons ADD COLUMN special_action TEXT DEFAULT NULL")
+            c.commit()
+        except Exception:
+            pass
 
 def is_admin(uid):
     return db().execute("SELECT 1 FROM admins WHERE id=?", (uid,)).fetchone() is not None
@@ -567,6 +580,57 @@ def get_all_special_btns() -> list:
         "SELECT * FROM buttons WHERE type='special' ORDER BY ord, id"
     ).fetchall()]
 
+def set_btn_special_action(bid, action):
+    c = db()
+    c.execute("UPDATE buttons SET special_action=? WHERE id=?", (action, bid))
+    c.commit(); c.close()
+
+# ── إعدادات البومودورو ────────────────────────────────────────────
+POMODORO_MODES = [
+    (25,  5,  "25 دراسة + 5 استراحة (افتراضي)"),
+    (40, 10,  "40 دراسة + 10 استراحة"),
+    (50, 10,  "50 دراسة + 10 استراحة"),
+    (90, 20,  "90 دراسة + 20 استراحة"),
+]
+
+def get_pomodoro_settings(uid: int) -> dict:
+    r = db().execute("SELECT * FROM pomodoro_settings WHERE user_id=?", (uid,)).fetchone()
+    if r:
+        return dict(r)
+    return {"user_id": uid, "enabled": 1, "study_min": 25, "break_min": 5}
+
+def save_pomodoro_settings(uid: int, enabled=None, study_min=None, break_min=None):
+    cur = get_pomodoro_settings(uid)
+    if enabled   is not None: cur["enabled"]   = enabled
+    if study_min is not None: cur["study_min"] = study_min
+    if break_min is not None: cur["break_min"] = break_min
+    c = db()
+    c.execute(
+        "INSERT OR REPLACE INTO pomodoro_settings(user_id,enabled,study_min,break_min) VALUES(?,?,?,?)",
+        (uid, cur["enabled"], cur["study_min"], cur["break_min"])
+    )
+    c.commit(); c.close()
+
+def _setup_pomodoro_feature():
+    """يضبط زر 421 كحاوية وينشئ زر البومودورو داخله إن لم يكن موجوداً."""
+    c = db()
+    b421 = c.execute("SELECT * FROM buttons WHERE id=421").fetchone()
+    if not b421:
+        c.close(); return
+    c.execute("UPDATE buttons SET special_action='container' WHERE id=421")
+    existing = c.execute(
+        "SELECT id FROM buttons WHERE parent_id=421 AND special_action='pomodoro' LIMIT 1"
+    ).fetchone()
+    if not existing:
+        ids = [r[0] for r in c.execute(
+            "SELECT id FROM buttons WHERE parent_id=421 ORDER BY ord,id"
+        ).fetchall()]
+        c.execute(
+            "INSERT INTO buttons(parent_id,type,label,ord,new_row,special_action) VALUES(?,?,?,?,?,?)",
+            (421, "special", "🍅 مؤقت الدراسة", len(ids)+1, 1, "pomodoro")
+        )
+    c.commit(); c.close()
+
 
 def swap_btns(bid1, bid2):
     """يبدّل موضع زرين (ord + new_row)."""
@@ -869,12 +933,38 @@ def kb_content_quick(bid):
 
 def kb_special_quick(bid):
     """خيارات سريعة لزر مميز عند ضغط الأدمن عليه من الكيبورد."""
-    b = get_btn(bid)
-    pid = b["parent_id"] if b else None
     rows = [
         [InlineKeyboardButton("✏️ تغيير الاسم", callback_data=f"el_{bid}")],
         [InlineKeyboardButton("🗑 حذف",          callback_data=f"confirm_x_{bid}")],
     ]
+    return InlineKeyboardMarkup(rows)
+
+def kb_special_container_quick(bid):
+    """خيارات سريعة لزر مميز حاوية عند ضغط الأدمن عليه."""
+    rows = [
+        [InlineKeyboardButton("📂 إدارة الأزرار الداخلية", callback_data=f"m_{bid}")],
+        [InlineKeyboardButton("✏️ تغيير الاسم",            callback_data=f"el_{bid}")],
+        [InlineKeyboardButton("🗑 حذف",                    callback_data=f"confirm_x_{bid}")],
+    ]
+    return InlineKeyboardMarkup(rows)
+
+def kb_pomodoro_settings(uid: int, show_modes: bool = False):
+    """لوحة إعدادات مؤقت البومودورو."""
+    s = get_pomodoro_settings(uid)
+    enabled  = s["enabled"]
+    study    = s["study_min"]
+    brk      = s["break_min"]
+    rows = []
+    toggle_lbl = "🔕 إيقاف المؤقت" if enabled else "🔔 تفعيل المؤقت"
+    rows.append([InlineKeyboardButton(toggle_lbl, callback_data="pom_toggle")])
+    if enabled:
+        for sm, bm, lbl in POMODORO_MODES:
+            check = "✅ " if (sm == study and bm == brk) else ""
+            rows.append([InlineKeyboardButton(
+                f"{check}{lbl}", callback_data=f"pom_mode_{sm}_{bm}"
+            )])
+        rows.append([InlineKeyboardButton("▶️ ابدأ جلسة دراسة", callback_data="pom_start")])
+    rows.append([InlineKeyboardButton("❌ إغلاق", callback_data="pom_close")])
     return InlineKeyboardMarkup(rows)
 
 def kb_item_actions(iid):
@@ -1819,10 +1909,33 @@ async def on_message(update: Update, ctx):
             await send_items(m, b["id"], uid=uid, bot=ctx.bot)
 
     elif b["type"] == "special":
-        if is_admin(uid):
-            await set_panel(ctx, chat_id,
-                            f"⭐ *{b['label']}*\n🔢 رقم الزر (ID): `{b['id']}`\n\n_هذا الزر مخصص — سلوكه يُحدَّد برمجياً._",
-                            kb_special_quick(b["id"]))
+        action = b.get("special_action")
+        if action == "container":
+            ctx.user_data["pid"] = b["id"]
+            await m.reply_text(".", reply_markup=build_kb(uid, b["id"]))
+            if is_admin(uid):
+                await set_panel(ctx, chat_id,
+                                f"⭐ *{b['label']}* — حاوية (#{b['id']})",
+                                kb_special_container_quick(b["id"]))
+        elif action == "pomodoro":
+            s = get_pomodoro_settings(uid)
+            status = "✅ مفعّل" if s["enabled"] else "❌ موقف"
+            await m.reply_text(
+                f"🍅 *مؤقت الدراسة (بومودورو)*\n\n"
+                f"⏱ الوضع: {s['study_min']} دراسة + {s['break_min']} استراحة\n"
+                f"الحالة: {status}",
+                parse_mode="Markdown",
+                reply_markup=kb_pomodoro_settings(uid)
+            )
+            if is_admin(uid):
+                await set_panel(ctx, chat_id,
+                                f"⭐ *{b['label']}* (#{b['id']})\n_زر بومودورو_",
+                                kb_special_quick(b["id"]))
+        else:
+            if is_admin(uid):
+                await set_panel(ctx, chat_id,
+                                f"⭐ *{b['label']}*\n🔢 رقم الزر (ID): `{b['id']}`\n\n_هذا الزر مخصص — سلوكه يُحدَّد برمجياً._",
+                                kb_special_quick(b["id"]))
 
 # ── معالج أزرار Inline ────────────────────────────────────────────
 async def cb_manage(update: Update, ctx):
@@ -1903,6 +2016,111 @@ async def cb_manage(update: Update, ctx):
                     )
                 except Exception:
                     pass
+        return
+
+    # ── معالجات البومودورو (لجميع المستخدمين) ────────────────────────
+    if d.startswith("pom_"):
+        await q.answer()
+        chat_id = q.message.chat_id
+
+        if d == "pom_toggle":
+            s = get_pomodoro_settings(uid)
+            save_pomodoro_settings(uid, enabled=0 if s["enabled"] else 1)
+            s2 = get_pomodoro_settings(uid)
+            status = "✅ مفعّل" if s2["enabled"] else "❌ موقف"
+            await q.edit_message_text(
+                f"🍅 *مؤقت الدراسة (بومودورو)*\n\n"
+                f"⏱ الوضع: {s2['study_min']} دراسة + {s2['break_min']} استراحة\n"
+                f"الحالة: {status}",
+                parse_mode="Markdown",
+                reply_markup=kb_pomodoro_settings(uid)
+            )
+            return
+
+        if d.startswith("pom_mode_"):
+            parts = d[9:].split("_")
+            sm, bm = int(parts[0]), int(parts[1])
+            save_pomodoro_settings(uid, study_min=sm, break_min=bm)
+            s2 = get_pomodoro_settings(uid)
+            status = "✅ مفعّل" if s2["enabled"] else "❌ موقف"
+            await q.edit_message_text(
+                f"🍅 *مؤقت الدراسة (بومودورو)*\n\n"
+                f"⏱ الوضع: {sm} دراسة + {bm} استراحة\n"
+                f"الحالة: {status}",
+                parse_mode="Markdown",
+                reply_markup=kb_pomodoro_settings(uid)
+            )
+            return
+
+        if d == "pom_start":
+            s = get_pomodoro_settings(uid)
+            if not s["enabled"]:
+                await q.answer("⚠️ المؤقت موقف. فعّله أولاً.", show_alert=True); return
+            study = s["study_min"]
+            brk   = s["break_min"]
+            for job in ctx.job_queue.get_jobs_by_name(f"pom_study_{uid}"):
+                job.schedule_removal()
+            for job in ctx.job_queue.get_jobs_by_name(f"pom_break_{uid}"):
+                job.schedule_removal()
+            ctx.job_queue.run_once(
+                _pom_study_end,
+                when=study * 60,
+                data={"uid": uid, "study_min": study, "break_min": brk, "chat_id": chat_id},
+                name=f"pom_study_{uid}"
+            )
+            await q.edit_message_text(
+                f"🍅 *بدأت جلسة الدراسة!* 💪\n\n"
+                f"⏱ ستصلك رسالة بعد *{study} دقيقة* عند انتهاء الوقت.\n\n"
+                f"_يمكنك الاستمرار في التصفح — سأذكّرك!_",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("✋ إيقاف الجلسة", callback_data="pom_stop")
+                ]])
+            )
+            return
+
+        if d.startswith("pom_break_start_"):
+            parts = d[len("pom_break_start_"):].split("_")
+            brk, study = int(parts[0]), int(parts[1])
+            for job in ctx.job_queue.get_jobs_by_name(f"pom_break_{uid}"):
+                job.schedule_removal()
+            ctx.job_queue.run_once(
+                _pom_break_end,
+                when=brk * 60,
+                data={"uid": uid, "study_min": study, "break_min": brk, "chat_id": chat_id},
+                name=f"pom_break_{uid}"
+            )
+            await q.edit_message_text(
+                f"🧘 *استراحة {brk} دقيقة*\n\nاسترح جيداً — سأذكّرك عند انتهاء الاستراحة.",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("✋ إنهاء الجلسة", callback_data="pom_stop")
+                ]])
+            )
+            return
+
+        if d == "pom_stop":
+            for job in ctx.job_queue.get_jobs_by_name(f"pom_study_{uid}"):
+                job.schedule_removal()
+            for job in ctx.job_queue.get_jobs_by_name(f"pom_break_{uid}"):
+                job.schedule_removal()
+            s = get_pomodoro_settings(uid)
+            await q.edit_message_text(
+                "✋ *تم إيقاف الجلسة.*\n\nأحسنت على المحاولة! يمكنك البدء مرة أخرى في أي وقت 💪",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("▶️ ابدأ جلسة جديدة", callback_data="pom_start")
+                ]])
+            )
+            return
+
+        if d == "pom_close":
+            try:
+                await q.message.delete()
+            except Exception:
+                await q.edit_message_text("✅")
+            return
+
         return
 
     await q.answer()
@@ -2331,9 +2549,15 @@ async def cb_manage(update: Update, ctx):
             await q.edit_message_text(f"📄 *{b['label']}*\n_{len(items)} عنصر_",
                                       parse_mode="Markdown", reply_markup=kb_content_panel(ep))
         elif b and b["type"] == "special":
-            await q.edit_message_text(
-                f"⭐ *{b['label']}*\n🔢 رقم الزر (ID): `{ep}`\n\n_هذا الزر مخصص — سلوكه يُحدَّد برمجياً._",
-                parse_mode="Markdown", reply_markup=kb_special_manage(ep))
+            action = b.get("special_action")
+            if action == "container":
+                await q.edit_message_text(
+                    f"⚙️ *إدارة أزرار: {b['label']}*", parse_mode="Markdown",
+                    reply_markup=kb_manage(ep))
+            else:
+                await q.edit_message_text(
+                    f"⭐ *{b['label']}*\n🔢 رقم الزر (ID): `{ep}`\n\n_هذا الزر مخصص._",
+                    parse_mode="Markdown", reply_markup=kb_special_manage(ep))
         else:
             await q.edit_message_text(f"📂 *{b['label']}*" if b else "⚙️ *إدارة الأزرار*:",
                                       parse_mode="Markdown", reply_markup=kb_manage(ep if b else None))
@@ -2348,9 +2572,15 @@ async def cb_manage(update: Update, ctx):
             await q.edit_message_text(f"📄 *{b['label']}*\n_{len(items)} عنصر_",
                                       parse_mode="Markdown", reply_markup=kb_content_panel(bid))
         elif b["type"] == "special":
-            await q.edit_message_text(
-                f"⭐ *{b['label']}*\n🔢 رقم الزر (ID): `{bid}`\n\n_هذا الزر مخصص — سلوكه يُحدَّد برمجياً._",
-                parse_mode="Markdown", reply_markup=kb_special_manage(bid))
+            action = b.get("special_action")
+            if action == "container":
+                await q.edit_message_text(
+                    f"⭐ *{b['label']}* — حاوية (#{bid})\nاضغط لإدارة الأزرار الداخلية:",
+                    parse_mode="Markdown", reply_markup=kb_special_container_quick(bid))
+            else:
+                await q.edit_message_text(
+                    f"⭐ *{b['label']}*\n🔢 رقم الزر (ID): `{bid}`\n\n_هذا الزر مخصص — سلوكه يُحدَّد برمجياً._",
+                    parse_mode="Markdown", reply_markup=kb_special_manage(bid))
         else:
             await q.edit_message_text(f"📂 *{b['label']}*", parse_mode="Markdown",
                                       reply_markup=kb_edit_menu_btn(bid))
@@ -2917,6 +3147,50 @@ async def _auto_backup_job(ctx):
     if sid.isdigit():
         await send_backup(ctx.bot, int(sid))
 
+# ── مهام البومودورو ───────────────────────────────────────────────
+async def _pom_study_end(ctx):
+    """يُرسل تنبيه نهاية وقت الدراسة."""
+    uid     = ctx.job.data["uid"]
+    brk     = ctx.job.data["break_min"]
+    study   = ctx.job.data["study_min"]
+    chat_id = ctx.job.data["chat_id"]
+    try:
+        await ctx.bot.send_message(
+            chat_id=chat_id,
+            text=(
+                f"⏰ *انتهى وقت الدراسة!* 🎉\n\n"
+                f"أحسنت! خذ استراحة *{brk} دقيقة* الآن. 🧘"
+            ),
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("✅ بدأت الاستراحة", callback_data=f"pom_break_start_{brk}_{study}")],
+                [InlineKeyboardButton("✋ إنهاء الجلسة",   callback_data="pom_stop")],
+            ])
+        )
+    except Exception as e:
+        logging.warning(f"pom_study_end failed: {e}")
+
+async def _pom_break_end(ctx):
+    """يُرسل تنبيه نهاية وقت الاستراحة."""
+    uid     = ctx.job.data["uid"]
+    study   = ctx.job.data["study_min"]
+    chat_id = ctx.job.data["chat_id"]
+    try:
+        await ctx.bot.send_message(
+            chat_id=chat_id,
+            text=(
+                f"🍅 *انتهت الاستراحة!*\n\n"
+                f"حان وقت الدراسة مرة أخرى — *{study} دقيقة*. هل أنت جاهز؟ 💪"
+            ),
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("▶️ ابدأ الآن",     callback_data="pom_start")],
+                [InlineKeyboardButton("✋ إنهاء الجلسة", callback_data="pom_stop")],
+            ])
+        )
+    except Exception as e:
+        logging.warning(f"pom_break_end failed: {e}")
+
 # ── إعداد البوت ──────────────────────────────────────────────────
 async def post_init(app):
     sid = os.environ.get("SUPER_ADMIN_ID", "").strip()
@@ -2925,6 +3199,8 @@ async def post_init(app):
     if sid.isdigit():
         app.job_queue.run_repeating(_auto_backup_job, interval=86400, first=3600, name="auto_backup")
         logging.info("تم جدولة النسخ الاحتياطي التلقائي كل 24 ساعة.")
+    _setup_pomodoro_feature()
+    logging.info("تم إعداد ميزة البومودورو.")
 
 def main():
     if not BOT_TOKEN:
