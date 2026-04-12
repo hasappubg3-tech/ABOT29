@@ -267,7 +267,7 @@ async def send_quiz_question(m, bid, question, uid=None, random_q=0):
         next_question = get_next_ordered_quiz_question(bid, question["id"])
     if next_question:
         await m.reply_text(
-            "بعد ما تخلص هذا السؤال اضغط الزر للانتقال للسؤال التالي.",
+            "🔥 هل مستعد للسؤال التالي؟\n\nركز زين، التحدي مستمر والحماس بعده بأوله!",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("➡️ السؤال التالي", callback_data=f"quiz_next_{bid}_{question['id']}")]
             ])
