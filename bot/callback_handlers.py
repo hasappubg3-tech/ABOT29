@@ -366,6 +366,7 @@ async def cb_manage(update: Update, ctx):
         if d.startswith("quiz_start_"):
             bid = int(d[len("quiz_start_"):])
             await q.answer()
+            start_quiz_session(ctx, uid, bid)
             import asyncio
             for n in ("3", "2", "1"):
                 try:
@@ -377,7 +378,13 @@ async def cb_manage(update: Update, ctx):
                 await q.edit_message_text("🚀 انطلق!")
             except Exception:
                 pass
-            await send_quiz(q.message, bid, uid=uid, bot=ctx.bot)
+            await send_quiz(q.message, bid, uid=uid, bot=ctx.bot, ctx=ctx)
+            return
+
+        if d.startswith("quiz_finish_"):
+            bid = int(d[len("quiz_finish_"):])
+            await q.answer()
+            await finish_quiz_session(q, ctx, bid, uid=uid, edit=True)
             return
 
         if d.startswith("quiz_next_"):
@@ -394,11 +401,15 @@ async def cb_manage(update: Update, ctx):
                 pass
             b = get_btn(bid)
             random_q = (b.get("random_quiz", 0) or 0) if b else 0
+            session = get_quiz_session(ctx, bid)
+            if session and session.get("sent", 0) >= session.get("total", 0):
+                await finish_quiz_session(q, ctx, bid, uid=uid, edit=True)
+                return
             if random_q:
                 question = get_next_random_question(bid, uid)
             else:
                 question = get_next_ordered_quiz_question(bid, current_qid)
-            await send_quiz_question(q.message, bid, question, uid=uid, random_q=random_q)
+            await send_quiz_question(q.message, bid, question, uid=uid, random_q=random_q, ctx=ctx)
             return
 
         await q.answer()

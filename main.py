@@ -16,6 +16,7 @@ def main():
     app.add_handler(CommandHandler("myid", cmd_myid))
     app.add_handler(PreCheckoutQueryHandler(precheckout_callback))
     app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_callback))
+    app.add_handler(PollAnswerHandler(on_poll_answer))
     app.add_handler(CallbackQueryHandler(cb_manage))
     app.add_handler(MessageHandler(media_filter, on_message))
 

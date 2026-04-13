@@ -204,7 +204,67 @@ async def send_items(m, bid, uid=None, bot=None):
         await send_btn_unified_rating_message(m, bid, uid=uid)
 
 # ── إرسال سؤال كويز للمستخدم ─────────────────────────────────────
-async def send_quiz(m, bid, uid=None, bot=None):
+def _quiz_session_key(bid):
+    return f"quiz_session_{bid}"
+
+def start_quiz_session(ctx, uid, bid):
+    import time as _time
+    b = get_btn(bid)
+    session = {
+        "id": f"{uid}_{bid}_{int(_time.time() * 1000)}",
+        "bid": bid,
+        "total": len(get_quiz_questions(bid)),
+        "sent": 0,
+        "answered": 0,
+        "correct": 0,
+        "answered_qids": [],
+        "finished": False,
+        "random_q": (b.get("random_quiz", 0) or 0) if b else 0,
+    }
+    ctx.user_data[_quiz_session_key(bid)] = session
+    return session
+
+def get_quiz_session(ctx, bid):
+    return ctx.user_data.get(_quiz_session_key(bid))
+
+def quiz_stats_text(session):
+    total = session.get("total", 0)
+    sent = session.get("sent", 0)
+    answered = session.get("answered", 0)
+    correct = session.get("correct", 0)
+    wrong = max(answered - correct, 0)
+    skipped = max(sent - answered, 0)
+    percent = round((correct / answered) * 100) if answered else 0
+    return (
+        "📊 *إحصائية الاختبار*\n\n"
+        f"🧩 مجموع الأسئلة: *{total}*\n"
+        f"📨 الأسئلة المعروضة: *{sent}*\n"
+        f"✍️ الإجابات المسجلة: *{answered}*\n"
+        f"✅ الإجابات الصحيحة: *{correct}*\n"
+        f"❌ الإجابات الخاطئة: *{wrong}*\n"
+        f"⏭️ غير المجابة: *{skipped}*\n\n"
+        f"🎯 نسبة الإجابات الصحيحة: *{percent}%*"
+    )
+
+def quiz_restart_markup(bid):
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔁 إعادة الاختبار", callback_data=f"quiz_start_{bid}")]
+    ])
+
+async def finish_quiz_session(target, ctx, bid, uid=None, edit=False):
+    session = get_quiz_session(ctx, bid)
+    if not session:
+        session = start_quiz_session(ctx, uid or 0, bid)
+    if session.get("finished"):
+        return
+    session["finished"] = True
+    text = quiz_stats_text(session)
+    if edit:
+        await target.edit_message_text(text, parse_mode="Markdown", reply_markup=quiz_restart_markup(bid))
+    else:
+        await target.reply_text(text, parse_mode="Markdown", reply_markup=quiz_restart_markup(bid))
+
+async def send_quiz(m, bid, uid=None, bot=None, ctx=None):
     b = get_btn(bid)
     random_q = (b.get("random_quiz", 0) or 0) if b else 0
     if random_q and uid:
@@ -212,7 +272,7 @@ async def send_quiz(m, bid, uid=None, bot=None):
     else:
         questions = get_quiz_questions(bid)
         question = questions[0] if questions else None
-    await send_quiz_question(m, bid, question, uid=uid, random_q=random_q)
+    await send_quiz_question(m, bid, question, uid=uid, random_q=random_q, ctx=ctx)
 
 async def send_quiz_ready(m, bid):
     b = get_btn(bid)
@@ -236,9 +296,12 @@ def get_next_ordered_quiz_question(bid, current_qid=None):
             return questions[i + 1] if i + 1 < len(questions) else None
     return questions[0]
 
-async def send_quiz_question(m, bid, question, uid=None, random_q=0):
+async def send_quiz_question(m, bid, question, uid=None, random_q=0, ctx=None):
     if not question:
-        await m.reply_text("🎉 انتهت أسئلة الكويز. أحسنت!")
+        if ctx:
+            await finish_quiz_session(m, ctx, bid, uid=uid)
+        else:
+            await m.reply_text("🎉 انتهت أسئلة الكويز. أحسنت!")
         return
     opts = get_quiz_options(question["id"])
     if len(opts) < 2:
@@ -248,7 +311,7 @@ async def send_quiz_question(m, bid, question, uid=None, random_q=0):
     if correct_idx >= len(opts):
         correct_idx = 0
     explanation = question.get("explanation", "") or ""
-    await m.reply_poll(
+    sent_poll = await m.reply_poll(
         question=question["question"],
         options=[opt["text"] for opt in opts],
         type="quiz",
@@ -256,6 +319,18 @@ async def send_quiz_question(m, bid, question, uid=None, random_q=0):
         explanation=explanation if explanation else None,
         is_anonymous=False,
     )
+    session = get_quiz_session(ctx, bid) if ctx else None
+    if session:
+        if question["id"] not in session["answered_qids"]:
+            session["sent"] = min(session.get("sent", 0) + 1, session.get("total", 0))
+        ctx.bot_data.setdefault("quiz_poll_map", {})[sent_poll.poll.id] = {
+            "user_id": uid,
+            "chat_id": m.chat_id,
+            "bid": bid,
+            "qid": question["id"],
+            "correct_idx": correct_idx,
+            "session_id": session["id"],
+        }
     if uid and random_q:
         log_question_sent(uid, question["id"])
     next_question = None
@@ -269,13 +344,34 @@ async def send_quiz_question(m, bid, question, uid=None, random_q=0):
         await m.reply_text(
             "🔥 هل مستعد للسؤال التالي؟",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("➡️ السؤال التالي", callback_data=f"quiz_next_{bid}_{question['id']}")]
+                [InlineKeyboardButton("➡️ السؤال التالي", callback_data=f"quiz_next_{bid}_{question['id']}")],
+                [InlineKeyboardButton("🏁 إنهاء الاختبار", callback_data=f"quiz_finish_{bid}")]
             ])
         )
-    else:
-        await m.reply_text(
-            "🎉 خلصت أسئلة الاختبار.\n\nأحسنت، تقدر تعيد الاختبار من البداية إذا تحب.",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔁 إعادة الاختبار", callback_data=f"quiz_start_{bid}")]
-            ])
-        )
+
+async def on_poll_answer(update: Update, ctx):
+    answer = update.poll_answer
+    data = ctx.bot_data.get("quiz_poll_map", {}).get(answer.poll_id)
+    if not data or data.get("user_id") != answer.user.id:
+        return
+    session = get_quiz_session(ctx, data["bid"])
+    if not session or session.get("id") != data.get("session_id") or session.get("finished"):
+        return
+    qid = data["qid"]
+    if qid in session["answered_qids"]:
+        return
+    session["answered_qids"].append(qid)
+    session["answered"] = session.get("answered", 0) + 1
+    selected = answer.option_ids[0] if answer.option_ids else None
+    if selected == data["correct_idx"]:
+        session["correct"] = session.get("correct", 0) + 1
+    if session.get("sent", 0) >= session.get("total", 0):
+        session["finished"] = True
+        chat_id = data.get("chat_id")
+        if chat_id:
+            await ctx.bot.send_message(
+                chat_id=chat_id,
+                text=quiz_stats_text(session),
+                parse_mode="Markdown",
+                reply_markup=quiz_restart_markup(data["bid"])
+            )
