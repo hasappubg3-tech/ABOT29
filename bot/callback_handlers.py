@@ -349,20 +349,23 @@ async def cb_manage(update: Update, ctx):
         except Exception:
             pass
         if is_video:
-            path, dl_title, duration = await download_yt_video(vid_id)
+            path, result2, duration = await download_yt_video(vid_id)
         else:
-            path, dl_title, duration = await download_yt_audio(vid_id)
-        real_title = dl_title or title
+            path, result2, duration = await download_yt_audio(vid_id)
+
         if not path:
+            err_msg = yt_error_message(result2 or "", is_video)
             try:
                 await q.edit_message_text(
-                    "❌ *تعذر التحميل*\n\nربما الفيديو محمي أو يتجاوز الحجم المسموح به (50MB).\nحاول فيديو آخر.",
+                    err_msg,
                     parse_mode="Markdown",
-                    reply_markup=kb_yt_cancel()
+                    reply_markup=kb_yt_choice(vid_id)
                 )
             except Exception:
                 pass
             return
+
+        real_title = result2 or title
         try:
             if is_video:
                 with open(path, "rb") as f:
@@ -373,24 +376,38 @@ async def cb_manage(update: Update, ctx):
                         supports_streaming=True,
                     )
             else:
+                # أرسل كـ audio إذا كان m4a/mp3، وإلا كـ document
+                file_ext = path.rsplit(".", 1)[-1].lower()
                 with open(path, "rb") as f:
-                    await ctx.bot.send_audio(
-                        chat_id=chat_id,
-                        audio=f,
-                        title=real_title,
-                        caption=f"🎵 {real_title}\n\n▶️ يوتيوب",
-                    )
+                    if file_ext in ("m4a", "mp3", "ogg"):
+                        await ctx.bot.send_audio(
+                            chat_id=chat_id,
+                            audio=f,
+                            title=real_title,
+                            caption=f"🎵 {real_title}\n\n▶️ يوتيوب",
+                        )
+                    else:
+                        await ctx.bot.send_document(
+                            chat_id=chat_id,
+                            document=f,
+                            filename=f"{real_title}.{file_ext}",
+                            caption=f"🎵 {real_title}\n\n▶️ يوتيوب",
+                        )
             try:
-                await q.edit_message_text(f"✅ *تم إرسال {mode_txt} بنجاح!*\n\n_{real_title}_", parse_mode="Markdown")
+                await q.edit_message_text(
+                    f"✅ *تم إرسال {mode_txt}!*\n\n_{real_title}_",
+                    parse_mode="Markdown"
+                )
             except Exception:
                 pass
         except Exception as e:
             logging.warning(f"yt send error: {e}")
+            send_err = yt_error_message(f"file_too_large:{TG_MAX_BYTES+1}" if "too large" in str(e).lower() or "Request Entity Too Large" in str(e) else str(e), is_video)
             try:
                 await q.edit_message_text(
-                    "❌ *تعذر إرسال الملف*\n\nالملف كبير جداً أو حدث خطأ.\nحاول فيديو آخر.",
+                    send_err,
                     parse_mode="Markdown",
-                    reply_markup=kb_yt_cancel()
+                    reply_markup=kb_yt_choice(vid_id)
                 )
             except Exception:
                 pass
