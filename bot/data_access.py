@@ -220,6 +220,11 @@ def init_db():
             c.commit()
         except Exception:
             pass
+        try:
+            c.execute("ALTER TABLE settings ADD COLUMN key TEXT")
+            c.commit()
+        except Exception:
+            pass
         c.execute("""
             CREATE TABLE IF NOT EXISTS exam_questions (
                 id        INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -264,6 +269,12 @@ def update_admin_username(uid, username=None):
     c = db()
     c.execute("UPDATE admins SET username=? WHERE id=?", (username.lstrip("@"), uid))
     c.commit(); c.close()
+
+def get_start_message():
+    return get_setting("start_message", "👋 أهلاً!")
+
+def set_start_message(value):
+    set_setting("start_message", value)
 
 def get_admin_by_username(username):
     username = (username or "").strip().lstrip("@").lower()

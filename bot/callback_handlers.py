@@ -814,6 +814,16 @@ async def cb_manage(update: Update, ctx):
         )
         return
 
+    if d == "st_startmsg":
+        current = get_start_message()
+        ctx.user_data["state"] = "wait_start_msg"
+        await q.edit_message_text(
+            f"✏️ *رسالة البداية الحالية:*\n\n_{current}_\n\nأرسل الرسالة الجديدة:",
+            parse_mode="Markdown",
+            reply_markup=kb_cancel_inline()
+        )
+        return
+
     if d == "st_caption_clear":
         set_setting("global_caption", "")
         await q.edit_message_text("✅ تم حذف الكليشة الثابتة.", parse_mode="Markdown",
