@@ -154,8 +154,21 @@ def kb_add_type():
             InlineKeyboardButton("⭐ مميز (للمشرفين فقط)", callback_data="pt_s"),
         ],
         [
+            InlineKeyboardButton("⚡ إضافة سريعة (عدة أزرار)", callback_data="pt_bulk"),
+        ],
+        [
             InlineKeyboardButton("❌ إلغاء", callback_data="pt_cancel"),
         ],
+    ])
+
+def kb_bulk_pick_type():
+    """يخيّر بين قائمة أو محتوى فقط للإضافة السريعة."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📂 قائمة", callback_data="pt_bulkm"),
+            InlineKeyboardButton("📄 محتوى", callback_data="pt_bulkc"),
+        ],
+        [InlineKeyboardButton("❌ إلغاء", callback_data="pt_cancel")],
     ])
 
 def kb_exam_panel(bid):

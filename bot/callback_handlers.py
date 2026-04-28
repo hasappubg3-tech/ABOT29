@@ -1578,6 +1578,26 @@ async def cb_manage(update: Update, ctx):
         ctx.user_data["state"] = "wait_label"
         await q.edit_message_text("✏️ اكتب اسم الزر الجديد:", reply_markup=kb_cancel_inline()); return
 
+    if d == "pt_bulk":
+        await q.edit_message_text(
+            "⚡ *إضافة سريعة*\n\nاختر نوع الأزرار التي تريد إنشاءها:",
+            parse_mode="Markdown", reply_markup=kb_bulk_pick_type())
+        return
+
+    if d in ("pt_bulkm", "pt_bulkc"):
+        t = "menu" if d == "pt_bulkm" else "content"
+        ctx.user_data["new_type"] = t
+        ctx.user_data["state"] = "wait_bulk_labels"
+        type_label = "📂 قوائم" if t == "menu" else "📄 أزرار محتوى"
+        await q.edit_message_text(
+            f"⚡ *إضافة سريعة* — {type_label}\n\n"
+            f"أرسل أسماء الأزرار:\n"
+            f"• كل اسم في *سطر مستقل*، أو افصل بفاصلة\n"
+            f"• أو أرسل *رسالة صوتية* وسأكتب لك تعليمات تحويلها لنص\n\n"
+            f"_مثال:_\n`الفصل الأول\nالفصل الثاني\nالفصل الثالث`",
+            parse_mode="Markdown", reply_markup=kb_cancel_inline())
+        return
+
     if d == "pt_cancel":
         ctx.user_data.pop("state", None); ctx.user_data.pop("new_type", None)
         ctx.user_data.pop("add_after", None); ctx.user_data.pop("add_pid", None)

@@ -459,6 +459,58 @@ async def on_message(update: Update, ctx):
             ctx.user_data["add_content_control_msg_id"] = control_msg.message_id
             return
 
+    # ── إضافة سريعة: عدة أزرار دفعة واحدة (نص أو صوت) ───────────
+    if state == "wait_bulk_labels":
+        if m.voice or m.audio:
+            await m.reply_text(
+                "🎙️ *لم يتم تفعيل تحويل الصوت لنص بعد.*\n\n"
+                "استخدم *لوحة المفاتيح بالصوت* في تلغرام: اضغط 🎤 على الكيبورد، "
+                "تكلم، ثم أرسل النص الناتج هنا.",
+                parse_mode="Markdown")
+            return
+        if not text or text in SPECIAL_BTNS:
+            await m.reply_text("⚠️ أرسل نصاً يحوي أسماء الأزرار."); return
+        t = ctx.user_data.get("new_type", "content")
+        add_pid = ctx.user_data.get("add_pid")
+        add_after = ctx.user_data.get("add_after", "END")
+        add_new_row = ctx.user_data.get("add_new_row", 1)
+        add_before = ctx.user_data.get("add_before")
+        # نقسم على الأسطر أو الفواصل
+        raw_parts = []
+        for line in text.replace(",", "\n").replace("،", "\n").split("\n"):
+            line = line.strip(" -•·\t")
+            if line and line not in SPECIAL_BTNS:
+                raw_parts.append(line)
+        if not raw_parts:
+            await m.reply_text("⚠️ لم أتعرف على أي اسم زر صالح."); return
+        created = []
+        last_after = add_after if add_after != "END" else None
+        last_before = add_before
+        for label in raw_parts:
+            if last_before is not None:
+                bid = add_btn_before(last_before, add_pid, t, label)
+                last_before = None
+                last_after = bid
+            elif last_after is not None:
+                bid = add_btn_after(last_after, add_pid, t, label, new_row=add_new_row)
+                last_after = bid
+                add_new_row = 1
+            else:
+                bid = add_btn(add_pid, t, label)
+                last_after = bid
+            created.append(label)
+        ctx.user_data.pop("state", None); ctx.user_data.pop("new_type", None)
+        ctx.user_data.pop("add_after", None); ctx.user_data.pop("add_pid", None)
+        ctx.user_data.pop("add_new_row", None); ctx.user_data.pop("add_before", None)
+        ctx.user_data["pid"] = add_pid
+        type_name = "قائمة" if t == "menu" else "محتوى"
+        summary = "\n".join(f"• {lbl}" for lbl in created)
+        await m.reply_text(
+            f"✅ تم إنشاء *{len(created)}* زر ({type_name}):\n{summary}",
+            parse_mode="Markdown",
+            reply_markup=build_kb(uid, add_pid))
+        return
+
     # ── انتظار نص رسالة الزر المدمج ─────────────────────────────
     if state == "wait_compound_text":
         if not m.text or m.text in SPECIAL_BTNS:
