@@ -1250,8 +1250,13 @@ async def on_message(update: Update, ctx):
                             f"🧩 *{b['label']}*\n_{len(children)} زر داخلي_",
                             kb_compound_quick(b["id"]))
         else:
-            text_msg = get_compound_text(b["id"])
-            await m.reply_text(text_msg, reply_markup=kb_compound_user(b["id"]))
+            children = get_buttons(b["id"])
+            # زر مدمج بمحتوى واحد فقط → عرض المحتوى مباشرة بدون قائمة اختيار
+            if len(children) == 1 and children[0].get("type") == "content":
+                await send_items(m, children[0]["id"], uid=uid, bot=ctx.bot)
+            else:
+                text_msg = get_compound_text(b["id"])
+                await m.reply_text(text_msg, reply_markup=kb_compound_user(b["id"]))
 
     elif b["type"] == "special":
         action = b.get("special_action")
