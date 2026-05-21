@@ -106,17 +106,21 @@ def get_storage_channel_id():
 # ── الأزرار ───────────────────────────────────────────────────────
 def get_buttons(pid=None):
     if pid is None:
-        docs = _col("buttons").find({"parent_id": None}).sort([("ord", 1), ("id", 1)])
+        docs = _col("buttons").find({"parent_id": None, "deleted": {"$ne": 1}}).sort([("ord", 1), ("id", 1)])
     else:
-        docs = _col("buttons").find({"parent_id": pid}).sort([("ord", 1), ("id", 1)])
+        docs = _col("buttons").find({"parent_id": pid, "deleted": {"$ne": 1}}).sort([("ord", 1), ("id", 1)])
     return [_d(r) for r in docs]
 
 def get_btn(bid):
+    return _d(_col("buttons").find_one({"id": bid, "deleted": {"$ne": 1}}))
+
+def get_btn_any(bid):
+    """يجلب الزر حتى لو كان محذوفاً ناعماً."""
     return _d(_col("buttons").find_one({"id": bid}))
 
 def _siblings_ids(pid):
     docs = _col("buttons").find(
-        {"parent_id": pid} if pid is not None else {"parent_id": None}
+        {"parent_id": pid, "deleted": {"$ne": 1}} if pid is not None else {"parent_id": None, "deleted": {"$ne": 1}}
     ).sort([("ord", 1), ("id", 1)])
     return [d["id"] for d in docs]
 
@@ -176,16 +180,107 @@ def upd_btn_label(bid, label):
     _col("buttons").update_one({"id": bid}, {"$set": {"label": label}})
 
 def del_btn(bid):
-    _delete_btn_recursive(bid)
+    _soft_delete_btn_recursive(bid)
 
-def _delete_btn_recursive(bid):
-    children = _col("buttons").find({"parent_id": bid})
+def _soft_delete_btn_recursive(bid):
+    """حذف ناعم — يخفي الزر وأبناءه ويحتفظ بالبيانات للاستعادة أو النسخ."""
+    children = _col("buttons").find({"parent_id": bid, "deleted": {"$ne": 1}})
     for child in children:
-        _delete_btn_recursive(child["id"])
-    _col("content_items").delete_many({"button_id": bid})
-    _col("quiz_questions").delete_many({"button_id": bid})
-    _col("exam_questions").delete_many({"button_id": bid})
-    _col("buttons").delete_one({"id": bid})
+        _soft_delete_btn_recursive(child["id"])
+    _col("buttons").update_one({"id": bid}, {"$set": {"deleted": 1}})
+
+def clone_btn(source_bid, pid, add_after="END", add_before=None, new_row=1):
+    """ينشئ نسخة كاملة من زر (حتى لو محذوف) في الموضع المحدد.
+    يشمل النسخ: المحتوى، الكويز (أسئلة+خيارات)، الامتحان، الأزرار الداخلية للزر المدمج."""
+    src = get_btn_any(source_bid)
+    if not src:
+        return None
+    label = src["label"]
+    t = src["type"]
+
+    if add_before is not None:
+        new_bid = add_btn_before(add_before, pid, t, label)
+    elif add_after != "END":
+        new_bid = add_btn_after(add_after, pid, t, label, new_row=new_row)
+    else:
+        new_bid = add_btn(pid, t, label)
+
+    updates = {}
+    for field in ["special_action", "compound_text", "random_quiz", "random_exam",
+                  "unified_rating", "no_caption", "no_btn_caption"]:
+        v = src.get(field)
+        if v is not None:
+            updates[field] = v
+    if updates:
+        _col("buttons").update_one({"id": new_bid}, {"$set": updates})
+
+    if t == "content":
+        items = list(_col("content_items").find({"button_id": source_bid}).sort([("ord", 1), ("id", 1)]))
+        for item in items:
+            n_id = _next_id("content_items")
+            _col("content_items").insert_one({
+                "id": n_id, "button_id": new_bid,
+                "type": item.get("type"), "content": item.get("content"),
+                "file_id": item.get("file_id"), "local_path": item.get("local_path"),
+                "channel_msg_id": item.get("channel_msg_id"), "ord": item.get("ord", 1)
+            })
+
+    elif t == "quiz":
+        questions = list(_col("quiz_questions").find({"button_id": source_bid}).sort([("ord", 1), ("id", 1)]))
+        for q in questions:
+            new_qid = _next_id("quiz_questions")
+            _col("quiz_questions").insert_one({
+                "id": new_qid, "button_id": new_bid,
+                "question": q.get("question"), "correct_option": q.get("correct_option", 0),
+                "explanation": q.get("explanation", ""), "ord": q.get("ord", 1)
+            })
+            opts = list(_col("quiz_options").find({"question_id": q["id"]}).sort([("ord", 1)]))
+            for opt in opts:
+                new_oid = _next_id("quiz_options")
+                _col("quiz_options").insert_one({
+                    "id": new_oid, "question_id": new_qid,
+                    "text": opt.get("text"), "ord": opt.get("ord", 1)
+                })
+
+    elif t == "exam":
+        questions = list(_col("exam_questions").find({"button_id": source_bid}).sort([("ord", 1), ("id", 1)]))
+        for eq in questions:
+            new_eqid = _next_id("exam_questions")
+            _col("exam_questions").insert_one({
+                "id": new_eqid, "button_id": new_bid,
+                "q_type": eq.get("q_type", "text"), "q_text": eq.get("q_text"),
+                "q_file_id": eq.get("q_file_id"), "q_channel_msg_id": eq.get("q_channel_msg_id"),
+                "a_type": eq.get("a_type", "text"), "a_text": eq.get("a_text"),
+                "a_file_id": eq.get("a_file_id"), "a_channel_msg_id": eq.get("a_channel_msg_id"),
+                "ord": eq.get("ord", 1)
+            })
+
+    elif t == "compound":
+        internal = list(_col("buttons").find(
+            {"parent_id": source_bid, "deleted": {"$ne": 1}}
+        ).sort([("ord", 1), ("id", 1)]))
+        for child in internal:
+            child_new_id = _next_id("buttons")
+            _col("buttons").insert_one({
+                "id": child_new_id, "parent_id": new_bid,
+                "type": child.get("type", "content"), "label": child.get("label", ""),
+                "ord": child.get("ord", 1), "new_row": child.get("new_row", 1),
+                "click_count": 0, "unified_rating": child.get("unified_rating", 1),
+                "no_caption": child.get("no_caption", 0), "no_btn_caption": child.get("no_btn_caption", 0),
+                "hidden": 0, "special_action": None, "compound_text": None,
+                "random_quiz": 0, "random_exam": 0, "deleted": 0,
+            })
+            child_items = list(_col("content_items").find({"button_id": child["id"]}).sort([("ord", 1)]))
+            for item in child_items:
+                n_id = _next_id("content_items")
+                _col("content_items").insert_one({
+                    "id": n_id, "button_id": child_new_id,
+                    "type": item.get("type"), "content": item.get("content"),
+                    "file_id": item.get("file_id"), "local_path": item.get("local_path"),
+                    "channel_msg_id": item.get("channel_msg_id"), "ord": item.get("ord", 1)
+                })
+
+    return new_bid
 
 def get_compound_text(bid):
     doc = _col("buttons").find_one({"id": bid}, {"compound_text": 1})
@@ -273,7 +368,7 @@ def swap_btns(bid1, bid2):
 
 # ── الزر الخاص ───────────────────────────────────────────────────
 def get_special_btn():
-    return _d(_col("buttons").find_one({"type": "special"}))
+    return _d(_col("buttons").find_one({"type": "special", "deleted": {"$ne": 1}}))
 
 def create_special_btn(label: str, pid=None) -> int:
     return add_btn(pid, "special", label)
@@ -284,11 +379,11 @@ def move_special_btn(bid: int, new_pid):
     _col("buttons").update_one({"id": bid}, {"$set": {"parent_id": new_pid, "ord": new_ord, "new_row": 1}})
 
 def all_menu_levels() -> list:
-    docs = _col("buttons").find({"type": "menu"}).sort([("ord", 1), ("id", 1)])
+    docs = _col("buttons").find({"type": "menu", "deleted": {"$ne": 1}}).sort([("ord", 1), ("id", 1)])
     return [_d(r) for r in docs]
 
 def get_all_special_btns() -> list:
-    docs = _col("buttons").find({"type": "special"}).sort([("ord", 1), ("id", 1)])
+    docs = _col("buttons").find({"type": "special", "deleted": {"$ne": 1}}).sort([("ord", 1), ("id", 1)])
     return [_d(r) for r in docs]
 
 def set_btn_special_action(bid, action):
@@ -561,9 +656,9 @@ def get_stats() -> str:
     sub_yesterday= mdb["user_stats"].count_documents({"subscribed_at": {"$gte": ts_yest_start, "$lt": ts_today_start}})
     sub_month    = mdb["user_stats"].count_documents({"subscribed_at": {"$gte": ts_month_start}})
 
-    total_btns = mdb["buttons"].count_documents({})
-    menus      = mdb["buttons"].count_documents({"type": "menu"})
-    content    = mdb["buttons"].count_documents({"type": "content"})
+    total_btns = mdb["buttons"].count_documents({"deleted": {"$ne": 1}})
+    menus      = mdb["buttons"].count_documents({"type": "menu", "deleted": {"$ne": 1}})
+    content    = mdb["buttons"].count_documents({"type": "content", "deleted": {"$ne": 1}})
     admins     = mdb["admins"].count_documents({})
 
     retention_7d  = f"{round(retained_7d/eligible_7d*100)}%" if eligible_7d > 0 else "—"
@@ -599,9 +694,9 @@ def get_stats() -> str:
 def get_trending_page(page: int, page_size: int = 10):
     offset = page * page_size
     docs = list(_col("buttons").find(
-        {"type": "content", "click_count": {"$gt": 0}}
+        {"type": "content", "click_count": {"$gt": 0}, "deleted": {"$ne": 1}}
     ).sort("click_count", -1).skip(offset).limit(page_size))
-    total = _col("buttons").count_documents({"type": "content", "click_count": {"$gt": 0}})
+    total = _col("buttons").count_documents({"type": "content", "click_count": {"$gt": 0}, "deleted": {"$ne": 1}})
     return [_d(r) for r in docs], total
 
 _TYPE_ICON = {"text": "📝", "photo": "🖼", "video": "🎬", "file": "📁", "audio": "🎵"}

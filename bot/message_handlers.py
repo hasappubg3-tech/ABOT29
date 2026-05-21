@@ -348,10 +348,78 @@ async def on_message(update: Update, ctx):
     if state == "wait_label":
         if not text or text in SPECIAL_BTNS:
             await m.reply_text("⚠️ أرسل نصاً صحيحاً للاسم."); return
-        t = ctx.user_data.get("new_type"); add_pid = ctx.user_data.get("add_pid")
+
+        add_pid     = ctx.user_data.get("add_pid")
         add_after   = ctx.user_data.get("add_after", "END")
         add_new_row = ctx.user_data.get("add_new_row", 0)
         add_before  = ctx.user_data.get("add_before")
+
+        # ── نسخ زر بالرقم: إذا أرسل المشرف رقماً بدلاً من اسم ──────
+        if text.strip().isdigit():
+            source_bid = int(text.strip())
+            src = get_btn_any(source_bid)
+            if src is None:
+                await m.reply_text(
+                    f"⚠️ لا يوجد زر بالرقم *#{source_bid}*.\n\nأرسل اسم الزر، أو رقم زر موجود لنسخه.",
+                    parse_mode="Markdown"
+                )
+                return
+            new_bid = clone_btn(source_bid, add_pid,
+                                add_after=add_after, add_before=add_before, new_row=add_new_row)
+            if not new_bid:
+                await m.reply_text("⚠️ حدث خطأ أثناء النسخ. حاول مجدداً."); return
+
+            cloned_b = get_btn(new_bid)
+            cloned_label = cloned_b["label"] if cloned_b else src["label"]
+            cloned_type  = cloned_b["type"]  if cloned_b else src["type"]
+            status_note  = " ♻️ _(مُستعاد من محذوف)_" if src.get("deleted") else " 📋 _(منسوخ)_"
+
+            ctx.user_data.pop("state", None); ctx.user_data.pop("new_type", None)
+            ctx.user_data.pop("add_after", None); ctx.user_data.pop("add_pid", None)
+            ctx.user_data.pop("add_new_row", None); ctx.user_data.pop("add_before", None)
+            ctx.user_data.pop("_from_exg", None); ctx.user_data.pop("_from_compound", None)
+            ctx.user_data["pid"] = add_pid
+
+            await m.reply_text(
+                f"✅ تم نسخ *{cloned_label}*{status_note}",
+                parse_mode="Markdown",
+                reply_markup=build_kb(uid, add_pid)
+            )
+            if cloned_type == "content":
+                items = get_items(new_bid)
+                await set_panel(ctx, chat_id,
+                                f"{btn_id_header(new_bid)}📄 *{cloned_label}*\n_{len(items)} عنصر منسوخ_",
+                                kb_content_panel(new_bid))
+            elif cloned_type == "quiz":
+                qs = get_quiz_questions(new_bid)
+                await set_panel(ctx, chat_id,
+                                f"{btn_id_header(new_bid)}📊 *{cloned_label}*\n_{len(qs)} سؤال منسوخ_",
+                                kb_quiz_panel(new_bid))
+            elif cloned_type == "exam":
+                qs = get_exam_questions(new_bid)
+                await set_panel(ctx, chat_id,
+                                f"{btn_id_header(new_bid)}📝 *{cloned_label}*\n_{len(qs)} سؤال منسوخ_",
+                                kb_exam_panel(new_bid))
+            elif cloned_type == "compound":
+                ch = get_buttons(new_bid)
+                await set_panel(ctx, chat_id,
+                                f"{btn_id_header(new_bid)}🧩 *{cloned_label}*\n_{len(ch)} زر داخلي منسوخ_",
+                                kb_compound_quick(new_bid))
+            elif cloned_type == "exam_group":
+                await set_panel(ctx, chat_id,
+                                f"{btn_id_header(new_bid)}🎓 *{cloned_label}*\n_زر امتحان رئيسي — منسوخ_",
+                                kb_exam_group_quick(new_bid))
+            elif cloned_type == "special":
+                await set_panel(ctx, chat_id,
+                                f"{btn_id_header(new_bid)}⭐ *{cloned_label}*\n_زر مخصص — منسوخ_",
+                                kb_special_manage(new_bid))
+            else:
+                await set_panel(ctx, chat_id,
+                                f"{btn_id_header(new_bid)}📂 *{cloned_label}*\n_قائمة — منسوخة_",
+                                kb_menu_quick(new_bid))
+            return
+
+        t = ctx.user_data.get("new_type")
         if add_before is not None:
             bid = add_btn_before(add_before, add_pid, t, text)
         elif add_after != "END":
