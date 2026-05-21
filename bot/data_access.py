@@ -51,6 +51,10 @@ def init_db():
     mdb["user_reply_sessions"].create_index([("user_id", ASCENDING), ("message_id", ASCENDING)], unique=True)
     mdb["active_file_convos"].create_index([("user_id", ASCENDING)], unique=True)
     mdb["quiz_sent_log"].create_index([("user_id", ASCENDING), ("question_id", ASCENDING)], unique=True)
+    mdb["comments"].create_index([("target_type", ASCENDING), ("target_id", ASCENDING)])
+    mdb["comments"].create_index([("id", ASCENDING)], unique=True)
+    mdb["comments"].create_index([("target_type", ASCENDING), ("target_id", ASCENDING), ("user_id", ASCENDING)], unique=True)
+    mdb["comment_reactions"].create_index([("comment_id", ASCENDING), ("user_id", ASCENDING)], unique=True)
     logging.info("MongoDB: تم تهيئة الفهارس.")
 
 # ── المشرفون ──────────────────────────────────────────────────────
@@ -567,7 +571,8 @@ def item_rating_text(iid: int, uid: int | None = None) -> str:
 
 def kb_item_rating(iid: int):
     return InlineKeyboardMarkup([[
-        InlineKeyboardButton("⭐ قيّم الملف", callback_data=f"rate_open_{iid}")
+        InlineKeyboardButton("⭐ قيّم الملف", callback_data=f"rate_open_{iid}"),
+        InlineKeyboardButton("💬 التعليقات", callback_data=f"cmts_item_{iid}"),
     ]])
 
 def kb_item_rating_choices(iid: int):
@@ -624,7 +629,8 @@ def btn_rating_text(bid: int, uid: int | None = None) -> str:
 
 def kb_btn_rating(bid: int):
     return InlineKeyboardMarkup([[
-        InlineKeyboardButton("⭐ قيّم المحتوى", callback_data=f"brate_open_{bid}")
+        InlineKeyboardButton("⭐ قيّم المحتوى", callback_data=f"brate_open_{bid}"),
+        InlineKeyboardButton("💬 التعليقات", callback_data=f"cmts_btn_{bid}"),
     ]])
 
 def kb_btn_rating_choices(bid: int):
@@ -636,6 +642,80 @@ def kb_btn_rating_choices(bid: int):
 
 async def send_btn_unified_rating_message(target, bid: int, uid=None):
     await target.reply_text(btn_rating_text(bid, uid), reply_markup=kb_btn_rating(bid))
+
+# ── التعليقات ─────────────────────────────────────────────────────
+def save_comment(target_type: str, target_id: int, user_id: int, display_name: str, text: str) -> int:
+    cid = _next_id("comments")
+    _col("comments").insert_one({
+        "id": cid, "target_type": target_type, "target_id": target_id,
+        "user_id": user_id, "display_name": display_name, "text": text,
+        "likes": 0, "dislikes": 0,
+        "created_at": int(_time.time()),
+    })
+    return cid
+
+def get_comment(cid: int):
+    return _d(_col("comments").find_one({"id": cid}))
+
+def get_comments(target_type: str, target_id: int) -> list:
+    docs = [_d(c) for c in _col("comments").find({"target_type": target_type, "target_id": target_id})]
+    docs.sort(key=lambda c: (c.get("likes", 0) + c.get("dislikes", 0), c.get("created_at", 0)), reverse=True)
+    return docs
+
+def get_user_comment(target_type: str, target_id: int, user_id: int):
+    return _d(_col("comments").find_one({"target_type": target_type, "target_id": target_id, "user_id": user_id}))
+
+def react_comment(cid: int, user_id: int, reaction: str) -> dict:
+    existing = _col("comment_reactions").find_one({"comment_id": cid, "user_id": user_id})
+    if existing:
+        if existing["type"] == reaction:
+            _col("comment_reactions").delete_one({"comment_id": cid, "user_id": user_id})
+            field = "likes" if reaction == "like" else "dislikes"
+            _col("comments").update_one({"id": cid}, {"$inc": {field: -1}})
+        else:
+            old_field = "likes" if existing["type"] == "like" else "dislikes"
+            new_field = "likes" if reaction == "like" else "dislikes"
+            _col("comment_reactions").update_one(
+                {"comment_id": cid, "user_id": user_id},
+                {"$set": {"type": reaction}}
+            )
+            _col("comments").update_one({"id": cid}, {"$inc": {old_field: -1, new_field: 1}})
+    else:
+        _col("comment_reactions").insert_one({"comment_id": cid, "user_id": user_id, "type": reaction})
+        field = "likes" if reaction == "like" else "dislikes"
+        _col("comments").update_one({"id": cid}, {"$inc": {field: 1}})
+    return get_comment(cid)
+
+def get_user_reaction(cid: int, user_id: int):
+    doc = _col("comment_reactions").find_one({"comment_id": cid, "user_id": user_id})
+    return doc["type"] if doc else None
+
+def kb_comments_list(target_type: str, target_id: int) -> InlineKeyboardMarkup:
+    comments = get_comments(target_type, target_id)
+    rows = []
+    pair = []
+    for c in comments:
+        name = (c.get("display_name") or "مجهول")[:14]
+        pair.append(InlineKeyboardButton(name, callback_data=f"cmt_view_{target_type}_{target_id}_{c['id']}"))
+        if len(pair) == 2:
+            rows.append(pair)
+            pair = []
+    if pair:
+        rows.append(pair)
+    rows.append([InlineKeyboardButton("➕ إضافة تعليق", callback_data=f"cmt_add_{target_type}_{target_id}")])
+    rows.append([InlineKeyboardButton("🔙 رجوع", callback_data=f"cmt_back_{target_type}_{target_id}")])
+    return InlineKeyboardMarkup(rows)
+
+def kb_comment_view(target_type: str, target_id: int, cid: int, likes: int, dislikes: int, user_reaction) -> InlineKeyboardMarkup:
+    like_lbl = f"👍 {likes}" + (" ✅" if user_reaction == "like" else "")
+    dis_lbl = f"👎 {dislikes}" + (" ✅" if user_reaction == "dislike" else "")
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(like_lbl, callback_data=f"cmt_react_{target_type}_{target_id}_{cid}_like"),
+            InlineKeyboardButton(dis_lbl, callback_data=f"cmt_react_{target_type}_{target_id}_{cid}_dislike"),
+        ],
+        [InlineKeyboardButton("🔙 رجوع", callback_data=f"cmts_{target_type}_{target_id}")],
+    ])
 
 # ── الإحصائيات ───────────────────────────────────────────────────
 def _today_str():

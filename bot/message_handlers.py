@@ -830,6 +830,28 @@ async def on_message(update: Update, ctx):
         )
         return
 
+    if state == "wait_comment":
+        target_type = ctx.user_data.pop("comment_target_type", None)
+        target_id = ctx.user_data.pop("comment_target_id", None)
+        ctx.user_data.pop("state", None)
+        if not target_type or not target_id:
+            return
+        if not text or not text.strip():
+            await m.reply_text("⚠️ أرسل نصاً فقط للتعليق.")
+            ctx.user_data["state"] = "wait_comment"
+            ctx.user_data["comment_target_type"] = target_type
+            ctx.user_data["comment_target_id"] = target_id
+            return
+        display_name = (update.effective_user.first_name or "مجهول").strip()
+        save_comment(target_type, target_id, uid, display_name, text.strip())
+        await m.reply_text(
+            "✅ تم نشر تعليقك!",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("💬 عرض التعليقات", callback_data=f"cmts_{target_type}_{target_id}")
+            ]])
+        )
+        return
+
     if state == "wait_donate_stars":
         stars = parse_stars_amount(text)
         if stars is None:

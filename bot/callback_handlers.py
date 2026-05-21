@@ -162,6 +162,104 @@ async def cb_manage(update: Update, ctx):
 
         return
 
+    # ── التعليقات — قائمة التعليقات ───────────────────────────────────────
+    if d.startswith("cmts_"):
+        # cmts_item_123  أو  cmts_btn_123
+        rest = d[5:]
+        sp = rest.split("_", 1)
+        target_type, target_id = sp[0], int(sp[1])
+        await q.answer()
+        comments = get_comments(target_type, target_id)
+        label = "الملف" if target_type == "item" else "المحتوى"
+        text = f"💬 تعليقات {label}\n\nعدد التعليقات: {len(comments)}"
+        if not comments:
+            text += "\n\nلا يوجد تعليقات بعد، كن أول من يعلّق! 🙂"
+        await q.edit_message_text(text, reply_markup=kb_comments_list(target_type, target_id))
+        return
+
+    # ── التعليقات — عرض / تفاعل / إضافة / رجوع ─────────────────────────
+    if d.startswith("cmt_"):
+        # ── رجوع لرسالة التقييم الأصلية ──
+        if d.startswith("cmt_back_"):
+            rest = d[len("cmt_back_"):]
+            sp = rest.split("_", 1)
+            target_type, target_id = sp[0], int(sp[1])
+            await q.answer()
+            if target_type == "item":
+                await q.edit_message_text(item_rating_text(target_id, uid), reply_markup=kb_item_rating(target_id))
+            else:
+                await q.edit_message_text(btn_rating_text(target_id, uid), reply_markup=kb_btn_rating(target_id))
+            return
+
+        # ── عرض تعليق واحد ──
+        if d.startswith("cmt_view_"):
+            # cmt_view_item_123_456  أو  cmt_view_btn_123_456
+            rest = d[len("cmt_view_"):]
+            parts = rest.split("_")
+            target_type = parts[0]
+            cid = int(parts[-1])
+            target_id = int(parts[-2])
+            cmt = get_comment(cid)
+            if not cmt:
+                await q.answer("⚠️ التعليق غير موجود.", show_alert=True); return
+            await q.answer()
+            user_reaction = get_user_reaction(cid, uid)
+            await q.edit_message_text(
+                f"💬 *تعليق:*\n\n{cmt['text']}",
+                parse_mode="Markdown",
+                reply_markup=kb_comment_view(target_type, target_id, cid,
+                                             cmt.get("likes", 0), cmt.get("dislikes", 0), user_reaction)
+            )
+            return
+
+        # ── تفاعل (👍 / 👎) ──
+        if d.startswith("cmt_react_"):
+            # cmt_react_item_123_456_like
+            rest = d[len("cmt_react_"):]
+            parts = rest.split("_")
+            reaction = parts[-1]
+            cid = int(parts[-2])
+            target_id = int(parts[-3])
+            target_type = parts[0]
+            if reaction not in ("like", "dislike"):
+                await q.answer(); return
+            updated = react_comment(cid, uid, reaction)
+            if not updated:
+                await q.answer("⚠️ التعليق غير موجود.", show_alert=True); return
+            await q.answer("✅")
+            user_reaction = get_user_reaction(cid, uid)
+            await q.edit_message_text(
+                f"💬 *تعليق:*\n\n{updated['text']}",
+                parse_mode="Markdown",
+                reply_markup=kb_comment_view(target_type, target_id, cid,
+                                             updated.get("likes", 0), updated.get("dislikes", 0), user_reaction)
+            )
+            return
+
+        # ── إضافة تعليق ──
+        if d.startswith("cmt_add_"):
+            # cmt_add_item_123  أو  cmt_add_btn_123
+            rest = d[len("cmt_add_"):]
+            sp = rest.split("_", 1)
+            target_type, target_id = sp[0], int(sp[1])
+            existing = get_user_comment(target_type, target_id, uid)
+            if existing:
+                await q.answer("📝 لديك تعليق بالفعل، لا يمكن إضافة أكثر من تعليق واحد.", show_alert=True)
+                return
+            await q.answer()
+            ctx.user_data["state"] = "wait_comment"
+            ctx.user_data["comment_target_type"] = target_type
+            ctx.user_data["comment_target_id"] = target_id
+            await q.edit_message_text(
+                "✏️ أرسل تعليقك الآن (نص فقط):",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("❌ إلغاء", callback_data=f"cmts_{target_type}_{target_id}")
+                ]])
+            )
+            return
+
+        return
+
     # ── معالجات التبرع بالنجوم (لجميع المستخدمين) ───────────────────────
     if d.startswith("don_"):
         await q.answer()
