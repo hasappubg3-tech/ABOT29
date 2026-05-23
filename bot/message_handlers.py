@@ -1065,14 +1065,15 @@ async def on_message(update: Update, ctx):
         # ── تنفيذ الحذف ───────────────────────────────────────────
         if action in ("delete_all", "delete_some", "delete_then_add"):
             if action == "delete_all":
-                to_delete = [b["id"] for b in current_btns]
+                to_delete = [(b["id"], b["label"]) for b in current_btns]
             else:
-                to_delete = [current_btns[i]["id"] for i in del_idx
+                to_delete = [(current_btns[i]["id"], current_btns[i]["label"]) for i in del_idx
                              if isinstance(i, int) and 0 <= i < len(current_btns)]
-            for bid in to_delete:
+            for bid, _ in to_delete:
                 del_btn(bid)
             if to_delete:
-                result_lines.append(f"🗑 تم حذف {len(to_delete)} زر")
+                del_lines = "\n".join(f"• `{bid}` — {lbl}" for bid, lbl in to_delete)
+                result_lines.append(f"🗑 تم حذف {len(to_delete)} زر\n{del_lines}\n📌 _احتفظ بالأرقام للاستعادة_")
             current_btns = get_buttons(pid)   # تحديث القائمة بعد الحذف
 
         # ── تنفيذ الإضافة (عمليات متعددة) ────────────────────────

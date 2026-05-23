@@ -1308,11 +1308,16 @@ async def cb_manage(update: Update, ctx):
         del_pid = None if pctx == "r" else int(pctx)
         btns = get_buttons(del_pid)
         count = len(btns)
+        deleted_info = [(b["id"], b["label"]) for b in btns]
         for b in btns:
             del_btn(b["id"])
         ctx.user_data["pid"] = del_pid
         level_name = "القائمة الرئيسية" if del_pid is None else (get_btn(del_pid) or {}).get("label", "القائمة الحالية")
-        await q.edit_message_text(f"🗑 تم حذف {count} زر من *{level_name}*.", parse_mode="Markdown")
+        lines = "\n".join(f"• `{bid}` — {lbl}" for bid, lbl in deleted_info)
+        await q.edit_message_text(
+            f"🗑 تم حذف {count} زر من *{level_name}*\n\n{lines}\n\n📌 _احتفظ بالأرقام للاستعادة إن احتجت_",
+            parse_mode="Markdown"
+        )
         await q.message.reply_text("🔄", reply_markup=build_kb(uid, del_pid))
         return
 
@@ -1697,11 +1702,15 @@ async def cb_manage(update: Update, ctx):
     # ── حذف زر ────────────────────────────────────────────────────
     if d.startswith("x_"):
         bid = int(d[2:]); b = get_btn(bid); ep = b["parent_id"] if b else None
+        label = b["label"] if b else "؟"
         del_btn(bid)
         ctx.user_data["pid"] = ep
         await q.edit_message_text("⚙️ *إدارة الأزرار*:", parse_mode="Markdown",
                                   reply_markup=kb_manage(ep))
-        await q.message.reply_text("✅ تم الحذف.", reply_markup=build_kb(uid, ep))
+        await q.message.reply_text(
+            f"🗑 تم حذف الزر *{label}*\n📌 رقمه: `{bid}` _(احتفظ به للاستعادة إن احتجت)_",
+            parse_mode="Markdown", reply_markup=build_kb(uid, ep)
+        )
         return
 
     # ── زر + جنب زر موجود ────────────────────────────────────────
