@@ -92,9 +92,13 @@ async def cb_manage(update: Update, ctx):
         elif d == "mlz_cancel":
             await after_mlz_cancel(q, ctx)
 
-        elif d in ("mlz_ef_g", "mlz_ef_s", "mlz_ef_t", "mlz_ef_y", "mlz_ef_g_text"):
+        elif d in ("mlz_ef_g", "mlz_ef_s", "mlz_ef_t", "mlz_ef_y", "mlz_ef_g_text", "mlz_ef_p"):
             field = d[len("mlz_ef_"):]
             await after_mlz_edit_field(q, ctx, field)
+
+        elif d.startswith("mlz_p_"):
+            val = d[len("mlz_p_"):]
+            await after_mlz_part_pick(q, ctx, val)
 
         elif d.startswith("mlz_g_"):
             bid = int(d[len("mlz_g_"):])

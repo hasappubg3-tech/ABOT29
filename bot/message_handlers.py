@@ -1111,7 +1111,7 @@ async def on_message(update: Update, ctx):
         return
 
     # ── ملزمة: تعديل حقل نصي ─────────────────────────────────────
-    if state in ("wait_mlz_subject", "wait_mlz_teacher", "wait_mlz_grade", "wait_mlz_year"):
+    if state in ("wait_mlz_subject", "wait_mlz_teacher", "wait_mlz_grade", "wait_mlz_year", "wait_mlz_part"):
         val = m.text.strip() if m.text else ""
         if not val:
             await m.reply_text("⚠️ أرسل نصاً صحيحاً."); return
@@ -1120,6 +1120,7 @@ async def on_message(update: Update, ctx):
             "wait_mlz_teacher": "mlz_teacher",
             "wait_mlz_grade":   "mlz_grade",
             "wait_mlz_year":    "mlz_year",
+            "wait_mlz_part":    "mlz_part",
         }
         ctx.user_data[key_map[state]] = val
         ctx.user_data.pop("state", None)
