@@ -80,15 +80,39 @@ async def cb_manage(update: Update, ctx):
                     pass
         return
 
-    # ── ملزمة: تأكيد أو تعديل ────────────────────────────────────────────
-    if d in ("mlz_confirm", "mlz_edit"):
+    # ── ملزمة: تأكيد / إلغاء / تعديل حقل / اختيار صف / اختيار نوع ─────
+    if d.startswith("mlz_"):
         if not is_admin(uid):
             await q.answer("⛔ غير مصرح.", show_alert=True); return
         chat_id = q.message.chat_id
+
         if d == "mlz_confirm":
             await after_mlz_confirm(q, ctx, uid, chat_id)
-        else:
-            await after_mlz_edit(q, ctx, uid, chat_id)
+
+        elif d == "mlz_cancel":
+            await after_mlz_cancel(q, ctx)
+
+        elif d in ("mlz_ef_g", "mlz_ef_s", "mlz_ef_t", "mlz_ef_y", "mlz_ef_g_text"):
+            field = d[len("mlz_ef_"):]
+            await after_mlz_edit_field(q, ctx, field)
+
+        elif d.startswith("mlz_g_"):
+            bid = int(d[len("mlz_g_"):])
+            await after_mlz_grade_pick(q, ctx, bid)
+
+        elif d.startswith("mlz_t_"):
+            suffix = d[len("mlz_t_"):]
+            if suffix == "custom":
+                await q.answer()
+                ctx.user_data["state"] = "wait_mlz_type"
+                await q.message.reply_text(
+                    "📌 *اكتب نوع الملزمة:*\n_(مثال: مراجعة، ملخص، نموذج امتحان)_",
+                    parse_mode="Markdown"
+                )
+            else:
+                idx = int(suffix)
+                mlz_type = MLZ_TYPES[idx] if idx < len(MLZ_TYPES) else "ملزمة"
+                await after_mlz_type_pick(q, ctx, uid, chat_id, mlz_type)
         return
 
     # ── رد المشرف على المستخدم (زر الرد) ────────────────────────────────

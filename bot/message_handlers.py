@@ -1110,7 +1110,7 @@ async def on_message(update: Update, ctx):
         await m.reply_text("✅", reply_markup=build_kb(uid, pid))
         return
 
-    # ── ملزمة: انتظار معلومة ناقصة ───────────────────────────────
+    # ── ملزمة: تعديل حقل نصي ─────────────────────────────────────
     if state in ("wait_mlz_subject", "wait_mlz_teacher", "wait_mlz_grade", "wait_mlz_year"):
         val = m.text.strip() if m.text else ""
         if not val:
@@ -1123,23 +1123,39 @@ async def on_message(update: Update, ctx):
         }
         ctx.user_data[key_map[state]] = val
         ctx.user_data.pop("state", None)
-        await _ask_next_missing(m, ctx, uid, chat_id)
+        try:
+            await m.delete()
+        except Exception:
+            pass
+        await _refresh_mlz_panel(ctx.bot, ctx)
         return
 
-    # ── ملزمة: انتظار الوصف اليدوي ───────────────────────────────
-    if state == "wait_mlz_desc":
-        val = m.text.strip() if m.text else ""
-        if not val:
-            await m.reply_text("⚠️ أرسل نصاً صحيحاً للوصف."); return
-        ctx.user_data["mlz_desc"] = val
-        ctx.user_data["state"] = "wait_mlz_type"
-        await m.reply_text(
-            "📌 *ما نوع الملزمة؟*\n_(مثال: مراجعة، ملخص، نموذج امتحان)_",
-            parse_mode="Markdown"
-        )
+    # ── ملزمة: تأكيد أو رفض التكرار ─────────────────────────────
+    if state == "wait_mlz_dup_confirm":
+        val = (m.text or "").strip()
+        if val in ("نعم", "yes", "y", "ن"):
+            ctx.user_data.pop("state", None)
+            teacher_bid = ctx.user_data.pop("mlz_dup_teacher_id", None)
+            btn_name    = ctx.user_data.pop("mlz_dup_btn_name", "")
+            desc        = ctx.user_data.pop("mlz_dup_desc", "")
+            file_type   = ctx.user_data.pop("mlz_dup_file_type", "")
+            file_id     = ctx.user_data.pop("mlz_dup_file_id", "")
+            path_parts  = [
+                ctx.user_data.pop("mlz_dup_grade", ""),
+                ctx.user_data.pop("mlz_dup_mlz", ""),
+                ctx.user_data.pop("mlz_dup_subject", ""),
+                ctx.user_data.pop("mlz_dup_teacher", ""),
+                btn_name,
+            ]
+            wait_msg = await m.reply_text("⏳ جاري الإضافة...")
+            await _do_add_mlz(wait_msg, ctx, ctx.bot, teacher_bid, btn_name, file_type, file_id, desc, path_parts)
+            _clear_mlz(ctx)
+        else:
+            await m.reply_text("❌ تم إلغاء الإضافة.")
+            _clear_mlz(ctx)
         return
 
-    # ── ملزمة: انتظار النوع ───────────────────────────────────────
+    # ── ملزمة: انتظار النوع يدوياً ───────────────────────────────
     if state == "wait_mlz_type":
         val = m.text.strip() if m.text else ""
         if not val:
