@@ -299,13 +299,19 @@ def find_or_build_mlz_path(grade: str, subject: str, teacher: str):
     if not subject_btn:
         return grade_btn, mlz_btn, None, None  # لا ننشئ زر مادة جديد
 
-    subject_children = [b for b in get_buttons(subject_btn['id']) if b['type'] == 'compound']
+    subject_children = [b for b in get_buttons(subject_btn['id'])
+                        if b['type'] == 'compound' and not b.get('deleted')]
     teacher_btn = _fuzzy_match(teacher, subject_children)
     if not teacher_btn:
         # كشف نمط الرموز من أزرار المدرسين الموجودة وتطبيقه
         t_prefix, t_suffix = _extract_emoji_wrap(subject_children)
         teacher_label = _apply_emoji_wrap(teacher, t_prefix, t_suffix)
-        new_id = add_btn(subject_btn['id'], 'compound', teacher_label)
+        # زرين في كل سطر: إذا العدد فردي → أضف بجانب الأخير، إذا زوجي → سطر جديد
+        if len(subject_children) % 2 == 1:
+            last_bid = subject_children[-1]['id']
+            new_id = add_btn_after(last_bid, subject_btn['id'], 'compound', teacher_label, new_row=0)
+        else:
+            new_id = add_btn(subject_btn['id'], 'compound', teacher_label)
         teacher_btn = get_btn(new_id)
 
     return grade_btn, mlz_btn, subject_btn, teacher_btn
